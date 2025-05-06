@@ -6,13 +6,22 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AEB468BC4A117C64DC6E3702 /* Pods_ArZhaba.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BD565B28E6A27B896C53F9D5 /* Pods_ArZhaba.framework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		516802C8692F96A0E3DADA55 /* Pods-ArZhaba.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-ArZhaba.debug.xcconfig"; path = "Target Support Files/Pods-ArZhaba/Pods-ArZhaba.debug.xcconfig"; sourceTree = "<group>"; };
+		8E60743DCB10F1DFC76ECF2B /* Pods-ArZhaba.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-ArZhaba.release.xcconfig"; path = "Target Support Files/Pods-ArZhaba/Pods-ArZhaba.release.xcconfig"; sourceTree = "<group>"; };
 		B803D6302DCA5E3A00C76F66 /* ArZhaba.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ArZhaba.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BD565B28E6A27B896C53F9D5 /* Pods_ArZhaba.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_ArZhaba.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		B803D6322DCA5E3A00C76F66 /* ArZhaba */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = ArZhaba;
 			sourceTree = "<group>";
 		};
@@ -23,17 +32,30 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AEB468BC4A117C64DC6E3702 /* Pods_ArZhaba.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		5787DE4AD2992085E49E89CF /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				516802C8692F96A0E3DADA55 /* Pods-ArZhaba.debug.xcconfig */,
+				8E60743DCB10F1DFC76ECF2B /* Pods-ArZhaba.release.xcconfig */,
+			);
+			name = Pods;
+			path = Pods;
+			sourceTree = "<group>";
+		};
 		B803D6272DCA5E3A00C76F66 = {
 			isa = PBXGroup;
 			children = (
 				B803D6322DCA5E3A00C76F66 /* ArZhaba */,
 				B803D6312DCA5E3A00C76F66 /* Products */,
+				5787DE4AD2992085E49E89CF /* Pods */,
+				F9F3F4B06CCACCE213B8F76F /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -45,6 +67,14 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		F9F3F4B06CCACCE213B8F76F /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				BD565B28E6A27B896C53F9D5 /* Pods_ArZhaba.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -52,6 +82,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = B803D63E2DCA5E3D00C76F66 /* Build configuration list for PBXNativeTarget "ArZhaba" */;
 			buildPhases = (
+				69AB494709EA5EFB474423AB /* [CP] Check Pods Manifest.lock */,
 				B803D62C2DCA5E3A00C76F66 /* Sources */,
 				B803D62D2DCA5E3A00C76F66 /* Frameworks */,
 				B803D62E2DCA5E3A00C76F66 /* Resources */,
@@ -64,8 +95,6 @@
 				B803D6322DCA5E3A00C76F66 /* ArZhaba */,
 			);
 			name = ArZhaba;
-			packageProductDependencies = (
-			);
 			productName = ArZhaba;
 			productReference = B803D6302DCA5E3A00C76F66 /* ArZhaba.app */;
 			productType = "com.apple.product-type.application";
@@ -113,6 +142,31 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		69AB494709EA5EFB474423AB /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-ArZhaba-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		B803D62C2DCA5E3A00C76F66 /* Sources */ = {
@@ -246,6 +300,7 @@
 		};
 		B803D63F2DCA5E3D00C76F66 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 516802C8692F96A0E3DADA55 /* Pods-ArZhaba.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -277,6 +332,7 @@
 		};
 		B803D6402DCA5E3D00C76F66 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 8E60743DCB10F1DFC76ECF2B /* Pods-ArZhaba.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;

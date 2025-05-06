@@ -7,32 +7,53 @@
 
 import SwiftUI
 import RealityKit
+import AVFoundation
 
 struct ContentView : View {
-
+    // Use the global view model instance from AppDelegate
+    @ObservedObject private var scanningViewModel = globalScanningViewModel
+    
     var body: some View {
-        RealityView { content in
-
-            // Create a cube model
-            let model = Entity()
-            let mesh = MeshResource.generateBox(size: 0.1, cornerRadius: 0.005)
-            let material = SimpleMaterial(color: .gray, roughness: 0.15, isMetallic: true)
-            model.components.set(ModelComponent(mesh: mesh, materials: [material]))
-            model.position = [0, 0.05, 0]
-
-            // Create horizontal plane anchor for the content
-            let anchor = AnchorEntity(.plane(.horizontal, classification: .any, minimumBounds: SIMD2<Float>(0.2, 0.2)))
-            anchor.addChild(model)
-
-            // Add the horizontal plane anchor to the scene
-            content.add(anchor)
-
-            content.camera = .spatialTracking
-
+        TabView {
+            ScanningView(viewModel: scanningViewModel)
+                .tabItem {
+                    Label("Scan", systemImage: "scanner")
+                }
+            
+            SavedScansView()
+                .tabItem {
+                    Label("Saved Scans", systemImage: "folder")
+                }
         }
-        .edgesIgnoringSafeArea(.all)
     }
+}
 
+struct ScanningView: View {
+    @ObservedObject var viewModel: ScanningViewModel
+    
+    var body: some View {
+        ZStack {
+            // AR view for scanning
+            ARScanView(viewModel: viewModel)
+                .edgesIgnoringSafeArea(.all)
+            
+            // Overlay controls
+            ScanningControlsView(viewModel: viewModel)
+        }
+        .onAppear {
+            // Check permission for camera
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                if !granted {
+                    viewModel.alertMessage = "Camera access is required for scanning"
+                    viewModel.showAlert = true
+                }
+            }
+        }
+        .onDisappear {
+            // Make sure scanning stops when leaving this view
+            viewModel.stopScanning()
+        }
+    }
 }
 
 #Preview {
