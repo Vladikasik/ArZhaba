@@ -73,7 +73,7 @@ struct SavedScansView: View {
             .onAppear {
                 refreshScans()
             }
-            .onChange(of: refreshTrigger) { _ in
+            .onChange(of: refreshTrigger) { _, _ in
                 refreshScans()
             }
             .sheet(isPresented: $showPreview) {

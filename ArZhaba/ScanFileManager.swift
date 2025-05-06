@@ -1,5 +1,14 @@
 import Foundation
 import ModelIO
+import UIKit
+import UniformTypeIdentifiers
+
+enum ExportFileType {
+    case obj
+    case usd
+    case usda
+    case usdc
+}
 
 class ScanFileManager {
     
@@ -65,6 +74,35 @@ class ScanFileManager {
         }
     }
     
+    /// Saves the scan to iOS Files app
+    func exportScanToFiles(from url: URL, completion: @escaping (Bool) -> Void) {
+        DispatchQueue.main.async {
+            guard let topViewController = UIApplication.shared.topMostViewController() else {
+                print("Could not find top view controller")
+                completion(false)
+                return
+            }
+            
+            let activityViewController = UIActivityViewController(
+                activityItems: [url],
+                applicationActivities: nil
+            )
+            
+            // For iPad
+            if let popoverController = activityViewController.popoverPresentationController {
+                popoverController.sourceView = topViewController.view
+                popoverController.sourceRect = CGRect(x: topViewController.view.bounds.midX, 
+                                                     y: topViewController.view.bounds.midY, 
+                                                     width: 0, height: 0)
+                popoverController.permittedArrowDirections = []
+            }
+            
+            topViewController.present(activityViewController, animated: true) {
+                completion(true)
+            }
+        }
+    }
+    
     /// Returns a list of saved scan files
     func getSavedScans() -> [URL] {
         guard let scansDirectory = scansDirectoryURL else {
@@ -110,5 +148,24 @@ class ScanFileManager {
                 print("Failed to create scans directory: \(error.localizedDescription)")
             }
         }
+    }
+}
+
+// MARK: - UIApplication Extension
+extension UIApplication {
+    func topMostViewController() -> UIViewController? {
+        let keyWindow = UIApplication.shared.connectedScenes
+            .filter { $0.activationState == .foregroundActive }
+            .compactMap { $0 as? UIWindowScene }
+            .first?.windows
+            .filter { $0.isKeyWindow }.first
+        
+        guard var topController = keyWindow?.rootViewController else { return nil }
+        
+        while let presentedViewController = topController.presentedViewController {
+            topController = presentedViewController
+        }
+        
+        return topController
     }
 } 

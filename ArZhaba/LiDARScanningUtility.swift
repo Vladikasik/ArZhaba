@@ -5,12 +5,13 @@ import Metal
 import ModelIO
 import MetalKit
 
-enum ExportFileType {
-    case obj
-    case usd
-    case usda
-    case usdc
-}
+// Enum definition moved to ScanFileManager.swift
+// enum ExportFileType {
+//     case obj
+//     case usd
+//     case usda
+//     case usdc
+// }
 
 class LiDARScanningUtility {
     
@@ -55,6 +56,11 @@ class LiDARScanningUtility {
         configuration.sceneReconstruction = .mesh
         configuration.environmentTexturing = .automatic
         
+        // Set the frame rate to optimize for better scanning
+        if #available(iOS 13.0, *) {
+            configuration.frameSemantics.insert(.smoothedSceneDepth)
+        }
+        
         return configuration
     }
     
@@ -75,11 +81,15 @@ class LiDARScanningUtility {
             return nil
         }
         
-        let asset = MDLAsset()
+        // Create an asset with our allocator
+        let asset = MDLAsset(bufferAllocator: allocator)
         
+        // Process mesh anchors
         for anchor in meshAnchors {
             if let mesh = createMDLMesh(from: anchor) {
                 asset.add(mesh)
+            } else {
+                print("Error processing mesh anchor")
             }
         }
         
@@ -112,12 +122,13 @@ class LiDARScanningUtility {
         let vertexCount = vertices.count
         let vertexStride = vertices.stride
         
-        // Create vertex buffer with raw data
-        let vertexBufferPointer = vertices.buffer.contents()
-        guard vertexBufferPointer != nil else {
-            print("Failed to access vertex buffer contents")
+        // Skip empty meshes
+        if vertexCount == 0 {
             return nil
         }
+        
+        // Create vertex buffer with raw data
+        let vertexBufferPointer = vertices.buffer.contents()
         
         let vertexData = Data(bytesNoCopy: vertexBufferPointer,
                              count: vertexCount * vertexStride,
@@ -130,12 +141,13 @@ class LiDARScanningUtility {
         let faceCount = faces.count / 3
         let indexCount = faceCount * 3
         
-        // Create index buffer with raw data
-        let indexBufferPointer = faces.buffer.contents()
-        guard indexBufferPointer != nil else {
-            print("Failed to access face buffer contents")
+        // Skip meshes with no faces
+        if indexCount == 0 {
             return nil
         }
+        
+        // Create index buffer with raw data
+        let indexBufferPointer = faces.buffer.contents()
         
         let indexData = Data(bytesNoCopy: indexBufferPointer,
                             count: indexCount * MemoryLayout<UInt32>.size,
