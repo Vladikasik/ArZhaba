@@ -13,5 +13,47 @@
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>3D Object File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.3d-content</string>
+                <string>model/obj</string>
+                <string>model/vnd.usdz+zip</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+                <string>public.3d-content</string>
+            </array>
+            <key>UTTypeDescription</key>
+            <string>OBJ 3D Model</string>
+            <key>UTTypeIdentifier</key>
+            <string>model/obj</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>obj</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>model/obj</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
 </dict>
 </plist>

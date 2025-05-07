@@ -9,9 +9,6 @@ import UIKit
 import SwiftUI
 import ARKit
 
-// Create a global instance of ScanningViewModel to share between AppDelegate and ContentView
-let globalScanningViewModel = ScanningViewModel()
-
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
@@ -20,7 +17,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         
         // Create the SwiftUI view that provides the window contents.
-        let contentView = ContentView()
+        let contentView = MainView()
 
         // Use a UIHostingController as window root view controller.
         let window = UIWindow(frame: UIScreen.main.bounds)
@@ -33,14 +30,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationWillResignActive(_ application: UIApplication) {
         // Sent when the application is about to move from active to inactive state. This can occur for certain types of temporary interruptions (such as an incoming phone call or SMS message) or when the user quits the application and it begins the transition to the background state.
-        // Pause the AR session when the app becomes inactive
-        globalScanningViewModel.stopScanning()
+        // No need to explicitly stop AR session - the ScanningViewModel will handle this via view lifecycle methods
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
         // Use this method to release shared resources, save user data, invalidate timers, and store enough application state information to restore your application to its current state in case it is terminated later.
-        // Make sure AR session is stopped when app enters background
-        globalScanningViewModel.stopScanning()
+        // No need to explicitly stop AR session - the ScanningViewModel will handle this via view lifecycle methods
     }
 
     func applicationWillEnterForeground(_ application: UIApplication) {

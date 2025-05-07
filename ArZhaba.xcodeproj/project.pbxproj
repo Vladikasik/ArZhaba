@@ -20,8 +20,6 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		B803D6322DCA5E3A00C76F66 /* ArZhaba */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = ArZhaba;
 			sourceTree = "<group>";
 		};
@@ -45,7 +43,6 @@
 				516802C8692F96A0E3DADA55 /* Pods-ArZhaba.debug.xcconfig */,
 				8E60743DCB10F1DFC76ECF2B /* Pods-ArZhaba.release.xcconfig */,
 			);
-			name = Pods;
 			path = Pods;
 			sourceTree = "<group>";
 		};
