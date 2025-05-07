@@ -1,12 +1,13 @@
 import Foundation
 import ARKit
 
+/// Model representing an AR room with saved world map and anchors
 class RoomModel: Codable, Identifiable {
     let id: UUID
     let name: String
     var creationDate: Date
     
-    // URLs for the stored data
+    // URLs for the stored data (stored as strings for Codable)
     private var worldMapURLString: String
     private var anchorsURLString: String
     
@@ -14,6 +15,7 @@ class RoomModel: Codable, Identifiable {
         case id, name, creationDate, worldMapURLString, anchorsURLString
     }
     
+    // Computed properties for file URLs
     var worldMapURL: URL {
         URL(fileURLWithPath: worldMapURLString)
     }
@@ -22,12 +24,21 @@ class RoomModel: Codable, Identifiable {
         URL(fileURLWithPath: anchorsURLString)
     }
     
+    // Standard initializer
     init(id: UUID = UUID(), name: String, worldMapURL: URL, anchorsURL: URL) {
         self.id = id
         self.name = name
         self.creationDate = Date()
         self.worldMapURLString = worldMapURL.path
         self.anchorsURLString = anchorsURL.path
+    }
+    
+    // Format the date for display
+    var formattedDate: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: creationDate)
     }
     
     // Convenience method to create file URLs for a new room
@@ -64,13 +75,5 @@ class RoomModel: Codable, Identifiable {
         let anchorsURL = roomDirectory.appendingPathComponent("anchors.data")
         
         return (worldMapURL, anchorsURL)
-    }
-    
-    // Format the date for display
-    var formattedDate: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: creationDate)
     }
 } 

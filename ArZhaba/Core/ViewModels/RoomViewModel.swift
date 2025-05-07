@@ -3,7 +3,8 @@ import ARKit
 import Combine
 import SwiftUI
 
-class SphereAnchorViewModel: ObservableObject {
+/// ViewModel for managing AR room functionality
+class RoomViewModel: ObservableObject {
     // MARK: - Published Properties
     @Published var sphereAnchors: [SphereAnchor] = []
     @Published var statusMessage: String = "Create a new room or load an existing one"
@@ -21,6 +22,14 @@ class SphereAnchorViewModel: ObservableObject {
     // Controls for room selection
     @Published var isShowingRoomSelector: Bool = false
     
+    // Loading state and progress
+    @Published var isLoading: Bool = false
+    @Published var loadingProgress: Double = 0.0
+    @Published var loadingMessage: String = ""
+    
+    // Navigation control
+    @Published var shouldShowARRoom: Bool = false
+    
     // Color options for sphere anchors
     let colorOptions: [UIColor] = [
         .red, .blue, .green, .yellow, .purple, .orange, .cyan, .magenta
@@ -35,6 +44,10 @@ class SphereAnchorViewModel: ObservableObject {
     // Flag to indicate if the AR session has been initialized
     private var arSessionInitialized = false
     
+    // Sharing properties
+    @Published var isSharing: Bool = false
+    @Published var shareURL: URL? = nil
+    
     // MARK: - Private Properties
     private var cancellables = Set<AnyCancellable>()
     private let anchorService = ARAnchorService.shared
@@ -43,7 +56,6 @@ class SphereAnchorViewModel: ObservableObject {
     // MARK: - Initialization
     init() {
         setupSubscriptions()
-        // Load available rooms on startup
         loadAvailableRooms()
     }
     
@@ -76,6 +88,11 @@ class SphereAnchorViewModel: ObservableObject {
             .sink { [weak self] state in
                 self?.sessionState = state
                 self?.isRecording = state == .recording
+                
+                // Reset loading state when we're done
+                if state != .idle {
+                    self?.isLoading = false
+                }
             }
             .store(in: &cancellables)
         
@@ -94,11 +111,19 @@ class SphereAnchorViewModel: ObservableObject {
                 self?.availableRooms = rooms
             }
             .store(in: &cancellables)
+            
+        // Subscribe to loading progress
+        roomService.loadingProgressPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] progress in
+                self?.loadingProgress = progress
+            }
+            .store(in: &cancellables)
     }
     
     // MARK: - Public Methods
     
-    /// Setup and get the AR session - now lazy initialized only when needed
+    /// Setup and get the AR session - lazy initialized only when needed
     func getARSession() -> ARSession {
         if !arSessionInitialized {
             // Just get a placeholder AR session without full initialization
@@ -111,12 +136,11 @@ class SphereAnchorViewModel: ObservableObject {
     private func initializeARSessionIfNeeded() {
         if !arSessionInitialized {
             arSessionInitialized = true
-            // The actual session setup will happen when getARSession is called again
         }
     }
     
     /// Loads the list of available rooms
-    private func loadAvailableRooms() {
+    func loadAvailableRooms() {
         availableRooms = roomService.getAllRooms()
     }
     
@@ -169,6 +193,25 @@ class SphereAnchorViewModel: ObservableObject {
         }
     }
     
+    /// Start recording and show AR view
+    func startRecordingAndShowAR() {
+        guard !newRoomName.isEmpty else {
+            showAlert(message: "Room name cannot be empty")
+            return
+        }
+        
+        // Initialize AR session if not done yet
+        initializeARSessionIfNeeded()
+        
+        if anchorService.startRecording(roomName: newRoomName) {
+            newRoomName = ""
+            isShowingNewRoomDialog = false
+            
+            // Signal the view to show AR Room
+            shouldShowARRoom = true
+        }
+    }
+    
     /// Stop recording
     func stopRecording() -> Bool {
         return anchorService.stopRecording()
@@ -179,8 +222,22 @@ class SphereAnchorViewModel: ObservableObject {
         // Initialize AR session if not done yet
         initializeARSessionIfNeeded()
         
+        // Get a fresh session before loading the room to avoid state issues
+        let _ = getARSession()
+        
+        // Set loading state
+        isLoading = true
+        loadingProgress = 0.0
+        loadingMessage = "Loading room: \(room.name)"
+        
+        // Try to load the room
         if anchorService.loadRoom(room) {
+            // Success, hide room selector if it was showing
             isShowingRoomSelector = false
+        } else {
+            // Loading failed, show an error
+            showAlert(message: "Failed to load room: \(room.name). Please try again.")
+            isLoading = false
         }
     }
     
@@ -223,19 +280,52 @@ class SphereAnchorViewModel: ObservableObject {
         Color(selectedColor)
     }
     
-    /// Save the current world map (compatibility method for older views)
-    func saveWorldMap() {
-        // If we're already recording, stop and save
-        if sessionState == .recording {
-            // Use the result from stopRecording()
-            if stopRecording() {
-                showAlert(message: "Room saved with \(sphereAnchors.count) dots.")
-            } else {
-                showAlert(message: "Failed to save room.")
-            }
+    /// Loads a room and sets showARRoom to true
+    func loadAndShowRoom(_ room: RoomModel) {
+        // Clear states
+        isSharing = false
+        shareURL = nil
+        
+        // Initialize AR session if not done yet
+        initializeARSessionIfNeeded()
+        
+        // Get a fresh session before loading the room to avoid state issues
+        let _ = getARSession()
+        
+        // Set loading state
+        isLoading = true
+        loadingProgress = 0.0
+        loadingMessage = "Loading room: \(room.name)"
+        
+        // Try to load the room
+        if anchorService.loadRoom(room) {
+            // Signal the view to show AR Room
+            shouldShowARRoom = true
         } else {
-            // If we're not recording, prompt the user to start recording
-            isShowingNewRoomDialog = true
+            // Loading failed, show an error
+            showAlert(message: "Failed to load room: \(room.name). Please try again.")
+            isLoading = false
         }
+    }
+    
+    /// Exits the current mode (recording or viewing)
+    func exitCurrentMode() {
+        if sessionState == .recording {
+            _ = stopRecording()
+        } else if sessionState == .viewing {
+            returnToIdle()
+        }
+    }
+    
+    /// Share a room file
+    func shareRoom(url: URL) {
+        // Clear any pending state from previous actions
+        shouldShowARRoom = false
+        isShowingNewRoomDialog = false
+        isShowingRoomSelector = false
+        
+        // Set sharing properties
+        isSharing = true
+        shareURL = url
     }
 } 

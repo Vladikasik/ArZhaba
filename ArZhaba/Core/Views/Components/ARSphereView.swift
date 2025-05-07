@@ -2,15 +2,15 @@ import SwiftUI
 import ARKit
 import RealityKit
 
+/// UIViewRepresentable for rendering AR spheres
 struct ARSphereView: UIViewRepresentable {
-    @EnvironmentObject var viewModel: SphereAnchorViewModel
+    @EnvironmentObject var viewModel: RoomViewModel
     
     func makeUIView(context: Context) -> ARSCNView {
         let arView = ARSCNView(frame: .zero)
         
         // Configure scene to use less memory
         let scene = SCNScene()
-        // Use lower quality rendering to reduce memory usage
         scene.background.contents = UIColor.black
         arView.scene = scene
         arView.antialiasingMode = .none
@@ -45,13 +45,20 @@ struct ARSphereView: UIViewRepresentable {
     }
     
     func updateUIView(_ uiView: ARSCNView, context: Context) {
-        // Only update the session if needed to avoid "Attempting to enable an already-enabled session"
-        if uiView.session !== viewModel.getARSession() {
-            // Pause previous session if any to prevent multiple active sessions
-            uiView.session.pause()
-            
-            // Set the new session
-            uiView.session = viewModel.getARSession()
+        // Handle session updates carefully to avoid "already-enabled session" errors
+        let newSession = viewModel.getARSession()
+        if uiView.session !== newSession {
+            // Properly sequence session updates
+            DispatchQueue.main.async {
+                // Pause previous session if needed
+                uiView.session.pause()
+                
+                // Wait a tiny bit to ensure the pause is processed
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    // Set the new session and run it
+                    uiView.session = newSession
+                }
+            }
         }
         
         // Update rendering options based on session state
@@ -62,12 +69,29 @@ struct ARSphereView: UIViewRepresentable {
             uiView.autoenablesDefaultLighting = false
             uiView.automaticallyUpdatesLighting = false
             uiView.preferredFramesPerSecond = 15 // Lower FPS for idle
-        case .recording, .viewing:
+            uiView.debugOptions = []
+        case .recording:
             // Better quality for active use
             uiView.rendersContinuously = true
             uiView.autoenablesDefaultLighting = true
             uiView.automaticallyUpdatesLighting = true
             uiView.preferredFramesPerSecond = 30
+            
+            // Enable developer mesh visualization for recording only
+            if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+                uiView.debugOptions = [.showFeaturePoints, .showWorldOrigin]
+            } else {
+                uiView.debugOptions = [.showFeaturePoints, .showWorldOrigin]
+            }
+        case .viewing, .loading:
+            // Better quality for active use
+            uiView.rendersContinuously = true
+            uiView.autoenablesDefaultLighting = true
+            uiView.automaticallyUpdatesLighting = true
+            uiView.preferredFramesPerSecond = 30
+            
+            // In viewing mode, show feature points to help with relocalization
+            uiView.debugOptions = [.showFeaturePoints]
         }
     }
     
@@ -230,21 +254,6 @@ struct ARSphereView: UIViewRepresentable {
             // Remove from cache when node is removed
             if let sphereAnchor = anchor as? SphereAnchor {
                 nodeCache.removeValue(forKey: sphereAnchor.identifier)
-            }
-        }
-        
-        // Optimize scene rendering
-        func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
-            // Only render when needed based on app state
-            if let arView = self.arView {
-                switch parent.viewModel.sessionState {
-                case .idle:
-                    // Minimal rendering in idle state
-                    arView.isPlaying = false
-                case .recording, .viewing:
-                    // Active rendering in recording/viewing states
-                    arView.isPlaying = true
-                }
             }
         }
     }
