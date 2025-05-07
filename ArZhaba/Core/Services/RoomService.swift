@@ -41,11 +41,15 @@ class RoomService {
             if !FileManager.default.fileExists(atPath: roomsURL!.path) {
                 do {
                     try FileManager.default.createDirectory(at: roomsURL!, withIntermediateDirectories: true)
+                    Logger.shared.info("Created rooms directory at: \(roomsURL!.path)", 
+                              destination: "RoomService")
                 } catch {
-                    print("Error creating rooms directory: \(error)")
+                    Logger.shared.error("Error creating rooms directory: \(error)", 
+                               destination: "RoomService")
                 }
             }
         } else {
+            Logger.shared.error("Could not access documents directory", destination: "RoomService")
             self.roomsURL = nil
         }
         
@@ -265,6 +269,7 @@ class RoomService {
         // Load anchors asynchronously to avoid blocking the main thread
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else {
+                Logger.shared.error("Self reference lost during anchor loading", destination: "RoomService.loadAnchors")
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
@@ -279,9 +284,11 @@ class RoomService {
                 // Verify room directory exists
                 let roomDir = room.worldMapURL.deletingLastPathComponent()
                 if !FileManager.default.fileExists(atPath: roomDir.path) {
+                    Logger.shared.error("Room directory missing: \(roomDir.path)",
+                              destination: "RoomService.loadAnchors")
+                    
                     DispatchQueue.main.async {
                         self.statusSubject.send("Room directory not found: \(roomDir.path)")
-                        print("Room directory missing: \(roomDir.path)")
                         completion(nil)
                     }
                     return
@@ -289,9 +296,11 @@ class RoomService {
                 
                 // Check if file exists
                 if !FileManager.default.fileExists(atPath: room.anchorsURL.path) {
+                    Logger.shared.info("No anchors file found, creating empty room at: \(room.anchorsURL.path)",
+                             destination: "RoomService.loadAnchors")
+                    
                     DispatchQueue.main.async {
                         self.statusSubject.send("No anchors file found, creating empty room")
-                        print("Anchors file not found at: \(room.anchorsURL.path)")
                         completion([])
                     }
                     return
@@ -301,15 +310,18 @@ class RoomService {
                 do {
                     let attributes = try FileManager.default.attributesOfItem(atPath: room.anchorsURL.path)
                     if let fileSize = attributes[.size] as? NSNumber {
-                        print("Loading anchors file, size: \(fileSize.intValue) bytes")
+                        Logger.shared.info("Loading anchors file, size: \(fileSize.intValue) bytes",
+                                 destination: "RoomService.loadAnchors")
                     }
                 } catch {
-                    print("Error getting file attributes: \(error)")
+                    Logger.shared.warning("Error getting anchor file attributes: \(error)",
+                                destination: "RoomService.loadAnchors")
                 }
                 
                 // Load data
                 let data = try Data(contentsOf: room.anchorsURL)
-                print("Successfully loaded \(data.count) bytes of anchor data")
+                Logger.shared.info("Successfully loaded \(data.count) bytes of anchor data",
+                         destination: "RoomService.loadAnchors")
                 
                 // Update progress to 30%
                 DispatchQueue.main.async {
@@ -320,10 +332,17 @@ class RoomService {
                 let unarchiver = try NSKeyedUnarchiver(forReadingFrom: data)
                 unarchiver.decodingFailurePolicy = .setErrorAndReturn
                 
-                guard let anchors = unarchiver.decodeObject(of: [NSArray.self, SphereAnchor.self], forKey: NSKeyedArchiveRootObjectKey) as? [SphereAnchor] else {
+                // Explicitly set allowed classes to prevent unarchiving errors
+                let allowedClasses = [NSArray.self, SphereAnchor.self, ARAnchor.self, NSUUID.self, 
+                                      NSNumber.self, NSString.self, UIColor.self]
+                allowedClasses.forEach { unarchiver.setClass($0, forClassName: NSStringFromClass($0)) }
+                
+                guard let anchors = unarchiver.decodeObject(of: allowedClasses, forKey: NSKeyedArchiveRootObjectKey) as? [SphereAnchor] else {
+                    Logger.shared.error("Anchor decoding failed, data may be corrupted",
+                               destination: "RoomService.loadAnchors")
+                    
                     DispatchQueue.main.async {
                         self.statusSubject.send("Error decoding anchors: invalid format")
-                        print("Anchor decoding failed, data may be corrupted")
                         completion(nil)
                     }
                     return
@@ -337,6 +356,9 @@ class RoomService {
                 // Process anchors in batches for smoother UI
                 var loadedAnchors: [SphereAnchor] = []
                 let totalBatches = max(1, Int(ceil(Double(anchors.count) / Double(self.anchorBatchSize))))
+                
+                Logger.shared.info("Processing \(anchors.count) anchors in \(totalBatches) batches",
+                         destination: "RoomService.loadAnchors")
                 
                 for batchIndex in 0..<totalBatches {
                     let startIndex = batchIndex * self.anchorBatchSize
@@ -352,6 +374,9 @@ class RoomService {
                         self.statusSubject.send("Loading anchors: \(loadedAnchors.count)/\(anchors.count)")
                     }
                     
+                    Logger.shared.debug("Processed batch \(batchIndex+1)/\(totalBatches), total anchors: \(loadedAnchors.count)",
+                              destination: "RoomService.loadAnchors")
+                    
                     // Add a small delay between batches to avoid UI freezing
                     if batchIndex < totalBatches - 1 {
                         Thread.sleep(forTimeInterval: 0.05)
@@ -362,12 +387,17 @@ class RoomService {
                 DispatchQueue.main.async {
                     self.loadingProgressSubject.send(1.0)
                     self.statusSubject.send("Loaded \(loadedAnchors.count) anchors successfully")
+                    Logger.shared.info("Successfully completed loading \(loadedAnchors.count) anchors",
+                             source: "Anchor Loading",
+                             destination: "RoomService.loadAnchors")
                     completion(loadedAnchors)
                 }
             } catch {
+                Logger.shared.error("Detailed anchor loading error: \(error)",
+                           destination: "RoomService.loadAnchors")
+                
                 DispatchQueue.main.async {
                     self.statusSubject.send("Error loading anchors: \(error.localizedDescription)")
-                    print("Detailed loading error: \(error)")
                     self.loadingProgressSubject.send(0.0)
                     completion(nil)
                 }
@@ -391,8 +421,15 @@ class RoomService {
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
                 }
                 
-                // Use memory-efficient archiving
-                let data = try NSKeyedArchiver.archivedData(withRootObject: anchors, requiringSecureCoding: true)
+                // Configure archiver with proper security settings
+                let archiver = NSKeyedArchiver(requiringSecureCoding: true)
+                let allowedClasses = [NSArray.self, SphereAnchor.self, ARAnchor.self, NSUUID.self,
+                                      NSNumber.self, NSString.self, UIColor.self]
+                allowedClasses.forEach { archiver.setClassName(NSStringFromClass($0), for: $0) }
+                
+                // Archive with custom settings
+                archiver.encode(anchors, forKey: NSKeyedArchiveRootObjectKey)
+                let data = archiver.encodedData
                 
                 // Create a temporary file and then move it for atomicity
                 let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -457,6 +494,8 @@ class RoomService {
             self.loadingProgressSubject.send(progress)
             if !message.isEmpty {
                 self.statusSubject.send(message)
+                Logger.shared.debug("Progress update: \(Int(progress * 100))% - \(message)",
+                          destination: "Loading Progress")
             }
         }
     }

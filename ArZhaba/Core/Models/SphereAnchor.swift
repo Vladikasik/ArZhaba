@@ -77,12 +77,15 @@ class SphereAnchor: ARAnchor {
         
         self.color = UIColor(red: safeCGRed, green: safeCGGreen, blue: safeCGBlue, alpha: safeCGAlpha)
         
+        // Don't decode identifier or name - use parent class init instead
         super.init(coder: aDecoder)
     }
     
     override func encode(with aCoder: NSCoder) {
+        // Call super first to let the parent class handle all basic properties
         super.encode(with: aCoder)
         
+        // Only encode our custom properties, not the identifier or name
         aCoder.encode(radius > 0 ? radius : 0.025, forKey: CodingKeys.radius.rawValue)
         
         var r: CGFloat = 0
@@ -102,7 +105,6 @@ class SphereAnchor: ARAnchor {
         aCoder.encode(Float(max(0, min(1, b))), forKey: CodingKeys.blue.rawValue)
         aCoder.encode(Float(max(0, min(1, a))), forKey: CodingKeys.alpha.rawValue)
         
-        aCoder.encode(SphereAnchor.identifier, forKey: CodingKeys.identifier.rawValue)
-        aCoder.encode(name, forKey: CodingKeys.name.rawValue)
+        // Don't re-encode identifier or name - let parent class handle it
     }
 } 

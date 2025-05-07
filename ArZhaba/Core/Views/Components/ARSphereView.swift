@@ -163,15 +163,17 @@ struct ARSphereView: UIViewRepresentable {
             
             if let hitResult = hitTestResults.first,
                let node = hitResult.node.parent, // Parent node is the actual sphere node
-               let identifier = node.name,
-               let uuidString = identifier.isEmpty ? nil : identifier,
-               let uuid = UUID(uuidString: uuidString),
-               let anchor = parent.viewModel.sphereAnchors.first(where: { $0.identifier == uuid }) {
-                // Remove the anchor
-                parent.viewModel.removeSphere(anchor)
-                
-                // Remove from cache
-                nodeCache.removeValue(forKey: uuid)
+               let nodeName = node.name, 
+               !nodeName.isEmpty {
+                // Try to convert node name to UUID safely
+                if let uuid = UUID(uuidString: nodeName),
+                   let anchor = parent.viewModel.sphereAnchors.first(where: { $0.identifier == uuid }) {
+                    // Remove the anchor
+                    parent.viewModel.removeSphere(anchor)
+                    
+                    // Remove from cache
+                    nodeCache.removeValue(forKey: uuid)
+                }
             }
         }
         
@@ -214,6 +216,7 @@ struct ARSphereView: UIViewRepresentable {
             parentNode.addChildNode(node)
             
             // Set the name to match anchor identifier for later reference
+            // Use a safe conversion to avoid UUID-related crashes
             parentNode.name = sphereAnchor.identifier.uuidString
             
             // Add to cache

@@ -219,25 +219,40 @@ class RoomViewModel: ObservableObject {
     
     /// Load a room
     func loadRoom(_ room: RoomModel) {
-        // Initialize AR session if not done yet
-        initializeARSessionIfNeeded()
+        Logger.shared.info("Starting room load process from view model: \(room.name)",
+                  destination: "RoomViewModel.loadRoom")
         
-        // Get a fresh session before loading the room to avoid state issues
-        let _ = getARSession()
-        
-        // Set loading state
         isLoading = true
-        loadingProgress = 0.0
-        loadingMessage = "Loading room: \(room.name)"
+        statusMessage = "Preparing to load room: \(room.name)..."
         
-        // Try to load the room
-        if anchorService.loadRoom(room) {
-            // Success, hide room selector if it was showing
-            isShowingRoomSelector = false
-        } else {
-            // Loading failed, show an error
-            showAlert(message: "Failed to load room: \(room.name). Please try again.")
-            isLoading = false
+        // Ensure we clear any previous loading state
+        loadingProgress = 0.0
+        
+        // Give UI a moment to update before starting the loading process
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self = self else {
+                Logger.shared.error("Self reference lost when loading room", 
+                           destination: "RoomViewModel.loadRoom")
+                return
+            }
+            
+            // Start the loading process in the service
+            if self.anchorService.loadRoom(room) {
+                Logger.shared.info("Room loading started successfully", 
+                          destination: "RoomViewModel.loadRoom")
+                
+                self.loadingMessage = "Loading room..."
+                // No need to set isLoading = false here, the state publisher will do that
+            } else {
+                // Failed to start loading
+                Logger.shared.error("Failed to start room loading process", 
+                           destination: "RoomViewModel.loadRoom")
+                
+                self.isLoading = false
+                self.loadingProgress = 0.0
+                self.loadingMessage = ""
+                self.statusMessage = "Failed to load room: \(room.name)"
+            }
         }
     }
     

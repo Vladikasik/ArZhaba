@@ -18,6 +18,7 @@ class ARAnchorService: NSObject, ARSessionDelegate {
     
     // Sphere anchors collection
     private var sphereAnchors: [SphereAnchor] = []
+    private var pendingAnchors: [SphereAnchor]? // Anchors waiting to be added after successful localization
     
     // Publishers
     private let anchorsSubject = CurrentValueSubject<[SphereAnchor], Never>([])
@@ -31,6 +32,7 @@ class ARAnchorService: NSObject, ARSessionDelegate {
     
     // Track if session is active to prevent redundant calls
     private var isSessionActive = false
+    private var isLocalized = false
     
     var anchorsPublisher: AnyPublisher<[SphereAnchor], Never> {
         anchorsSubject.eraseToAnyPublisher()
@@ -51,6 +53,7 @@ class ARAnchorService: NSObject, ARSessionDelegate {
     // MARK: - Initialization
     private override init() {
         super.init()
+        Logger.shared.info("ARAnchorService initialized")
     }
     
     // MARK: - Public Methods
@@ -175,16 +178,20 @@ class ARAnchorService: NSObject, ARSessionDelegate {
     
     /// Loads a room for viewing
     func loadRoom(_ room: RoomModel) -> Bool {
+        Logger.shared.info("Starting to load room: \(room.name)", destination: "Room Loading")
+        
         // Ensure we have a clean session state
         if isSessionActive {
             arSession?.pause()
             isSessionActive = false
+            Logger.shared.debug("Paused existing AR session", destination: "Room Loading")
         }
         
         // Make sure we have a session
         if arSession == nil {
             arSession = ARSession()
             arSession?.delegate = self
+            Logger.shared.debug("Created new AR session", destination: "Room Loading")
         }
         
         // Update state to loading
@@ -192,13 +199,18 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         stateSubject.send(sessionState)
         statusSubject.send("Loading room: \(room.name)...")
         
+        // Reset localization flag
+        isLocalized = false
+        
         // Initialize loading progress
         RoomService.shared.updateLoadingProgress(0.1, message: "Starting to load room...")
         
         // Verify the room directory exists
         let roomDir = room.worldMapURL.deletingLastPathComponent()
         if !FileManager.default.fileExists(atPath: roomDir.path) {
-            statusSubject.send("Room directory not found: \(roomDir.path)")
+            let errorMsg = "Room directory not found: \(roomDir.path)"
+            Logger.shared.error(errorMsg, destination: "Room Loading")
+            statusSubject.send(errorMsg)
             sessionState = .idle
             stateSubject.send(sessionState)
             return false
@@ -206,7 +218,9 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         
         // Verify both required files exist
         if !FileManager.default.fileExists(atPath: room.worldMapURL.path) {
-            statusSubject.send("World map file not found at: \(room.worldMapURL.path)")
+            let errorMsg = "World map file not found at: \(room.worldMapURL.path)"
+            Logger.shared.error(errorMsg, destination: "Room Loading")
+            statusSubject.send(errorMsg)
             sessionState = .idle
             stateSubject.send(sessionState)
             return false
@@ -220,7 +234,7 @@ class ARAnchorService: NSObject, ARSessionDelegate {
             RoomService.shared.updateLoadingProgress(0.3, message: "Loading world map data...")
             
             let data = try Data(contentsOf: room.worldMapURL)
-            print("Successfully loaded \(data.count) bytes of world map data")
+            Logger.shared.info("Successfully loaded \(data.count) bytes of world map data", destination: "Room Loading")
             
             // Update progress
             RoomService.shared.updateLoadingProgress(0.4, message: "Parsing world map data...")
@@ -229,19 +243,22 @@ class ARAnchorService: NSObject, ARSessionDelegate {
             do {
                 // First try with secure coding
                 worldMap = try NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data)
+                Logger.shared.debug("World map decoded with secure coding", destination: "Room Loading")
             } catch {
-                print("Failed to unarchive with secure coding, trying alternative method: \(error)")
+                Logger.shared.warning("Failed to unarchive with secure coding, trying alternative method: \(error)", destination: "Room Loading")
                 // If secure coding fails, try alternative approach
                 let unarchiver = try NSKeyedUnarchiver(forReadingFrom: data)
                 unarchiver.requiresSecureCoding = false
                 worldMap = unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? ARWorldMap
+                Logger.shared.debug("World map decoded with alternative method", destination: "Room Loading")
             }
             
         } catch {
             sessionState = .idle
             stateSubject.send(sessionState)
-            statusSubject.send("Failed to load world map: \(error.localizedDescription)")
-            print("World map loading error details: \(error)")
+            let errorMsg = "Failed to load world map: \(error.localizedDescription)"
+            Logger.shared.error(errorMsg, source: "WorldMap Loading", destination: "Room Loading")
+            statusSubject.send(errorMsg)
             RoomService.shared.updateLoadingProgress(0.0, message: "Failed to load world map")
             return false
         }
@@ -249,7 +266,9 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         guard let validWorldMap = worldMap else {
             sessionState = .idle
             stateSubject.send(sessionState)
-            statusSubject.send("World map data is corrupted for room: \(room.name)")
+            let errorMsg = "World map data is corrupted for room: \(room.name)"
+            Logger.shared.error(errorMsg, destination: "Room Loading")
+            statusSubject.send(errorMsg)
             RoomService.shared.updateLoadingProgress(0.0, message: "World map data is corrupted")
             return false
         }
@@ -259,35 +278,47 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         
         // Clear existing anchors
         clearAllSphereAnchors()
+        Logger.shared.debug("Cleared all existing sphere anchors", destination: "Room Loading")
         
-        // Load anchors from the room asynchronously
+        // First start the AR session with the world map (without anchors)
+        Logger.shared.info("Starting AR session with world map (no anchors yet)", destination: "Room Loading")
+        
+        // Start loading process by initializing the AR environment
+        initializeAREnvironment(room, withWorldMap: validWorldMap)
+        
+        // Load anchors from the room asynchronously but don't add them to the scene yet
+        Logger.shared.info("Loading anchors asynchronously (will add after localization)", destination: "Room Loading")
         statusSubject.send("Loading anchors asynchronously...")
         RoomService.shared.updateLoadingProgress(0.6, message: "Loading anchors...")
         
         RoomService.shared.loadAnchors(from: room) { [weak self] loadedAnchors in
-            guard let self = self else { return }
+            guard let self = self else {
+                Logger.shared.error("Self reference lost during anchor loading", destination: "Room Loading")
+                return
+            }
             
-            // Handle the loaded anchors
+            // Store the anchors but don't add them to the scene yet
             if let anchors = loadedAnchors, !anchors.isEmpty {
                 self.statusSubject.send("Loaded \(anchors.count) anchors")
-                self.sphereAnchors = anchors
-                self.anchorsSubject.send(self.sphereAnchors)
+                Logger.shared.info("Successfully loaded \(anchors.count) anchors, storing for later placement", destination: "Room Loading")
+                
+                // Store the anchors to add them after localization
+                self.pendingAnchors = anchors
                 
                 // Update progress
-                RoomService.shared.updateLoadingProgress(0.8, message: "Anchors loaded, initializing AR session...")
-                
-                // Now setup the AR session with the world map
-                self.finishLoadingRoom(room, withWorldMap: validWorldMap)
+                RoomService.shared.updateLoadingProgress(0.8, message: "Anchors loaded, waiting for localization...")
             } else if let anchors = loadedAnchors, anchors.isEmpty {
                 // Successfully loaded but no anchors
                 self.statusSubject.send("No anchors found in this room. Continuing with empty scene.")
-                RoomService.shared.updateLoadingProgress(0.8, message: "No anchors found, initializing AR session...")
-                self.finishLoadingRoom(room, withWorldMap: validWorldMap)
+                Logger.shared.info("No anchors found in this room", destination: "Room Loading")
+                self.pendingAnchors = []
+                RoomService.shared.updateLoadingProgress(0.8, message: "No anchors found, waiting for localization...")
             } else {
                 // Failed to load anchors, but we can still try to load the room without them
                 self.statusSubject.send("Warning: Could not load anchors, continuing with empty room")
-                RoomService.shared.updateLoadingProgress(0.7, message: "Warning: Failed to load anchors. Initializing AR session...")
-                self.finishLoadingRoom(room, withWorldMap: validWorldMap)
+                Logger.shared.warning("Failed to load anchors, continuing with empty room", destination: "Room Loading") 
+                self.pendingAnchors = []
+                RoomService.shared.updateLoadingProgress(0.7, message: "Warning: Failed to load anchors. Waiting for localization...")
             }
         }
         
@@ -295,8 +326,10 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         return true
     }
     
-    /// Finishes loading a room after anchors are loaded
-    private func finishLoadingRoom(_ room: RoomModel, withWorldMap worldMap: ARWorldMap) {
+    /// Initializes the AR environment with a world map but without anchors
+    private func initializeAREnvironment(_ room: RoomModel, withWorldMap worldMap: ARWorldMap) {
+        Logger.shared.info("Initializing AR environment for room: \(room.name)", destination: "Room Loading")
+        
         // Create configuration with the world map
         let configuration = ARWorldTrackingConfiguration()
         configuration.planeDetection = [.horizontal, .vertical]
@@ -305,6 +338,7 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         // Enable basic features (keep it simpler for viewing mode)
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
             configuration.sceneReconstruction = .mesh
+            Logger.shared.debug("Enabled mesh reconstruction", destination: "Room Loading")
         }
         
         // Be more explicit about run options
@@ -315,19 +349,64 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         
         // Add a small delay to ensure pause completes
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            guard let self = self else { return }
+            guard let self = self else {
+                Logger.shared.error("Self reference lost when starting AR session", destination: "Room Loading")
+                return
+            }
             
             // Run session with this configuration
             self.arSession?.run(configuration, options: runOptions)
             self.isSessionActive = true
             
-            // Update state
-            self.sessionState = .viewing
+            // Keep loading state until localization completes
+            // Don't update state yet - wait for localization
             self.currentRoom = room
-            self.stateSubject.send(self.sessionState)
             self.currentRoomSubject.send(self.currentRoom)
             
-            self.statusSubject.send("Room loaded: \(room.name). Move the device around to relocalize...")
+            self.statusSubject.send("Room initializing: \(room.name). Move the device around to relocalize...")
+            Logger.shared.info("AR session started, waiting for localization", destination: "Room Loading")
+        }
+    }
+    
+    /// Adds the pending anchors to the scene after localization is complete
+    private func addPendingAnchorsToScene() {
+        guard let anchors = pendingAnchors, isLocalized else {
+            Logger.shared.warning("Cannot add pending anchors - either no anchors available or not localized",
+                         destination: "Anchor Placement")
+            return
+        }
+        
+        Logger.shared.info("Adding \(anchors.count) pending anchors to scene after localization",
+                  destination: "Anchor Placement")
+        
+        if anchors.isEmpty {
+            // If we have no anchors, just update the state
+            sphereAnchors = []
+            anchorsSubject.send(sphereAnchors)
+            Logger.shared.info("No anchors to add, scene is empty", destination: "Anchor Placement")
+        } else {
+            // Add anchors to the session
+            for anchor in anchors {
+                arSession?.add(anchor: anchor)
+            }
+            
+            // Update our collection
+            sphereAnchors = anchors
+            anchorsSubject.send(sphereAnchors)
+            Logger.shared.info("Successfully added \(anchors.count) anchors to AR scene", 
+                      destination: "Anchor Placement")
+        }
+        
+        // Clear pending anchors since they've been added
+        pendingAnchors = nil
+        
+        // Update status
+        statusSubject.send("Added \(anchors.count) anchors to the scene")
+        RoomService.shared.updateLoadingProgress(1.0, message: "Room fully loaded with \(anchors.count) anchors")
+        
+        // Short delay before hiding loading indicator
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            RoomService.shared.updateLoadingProgress(1.0, message: "")
         }
     }
     
@@ -490,10 +569,16 @@ class ARAnchorService: NSObject, ARSessionDelegate {
                 RoomService.shared.updateLoadingProgress(progress, message: "Extending map...")
             case .mapped:
                 if sessionState == .loading {
-                    // Successfully relocalized, now display anchors
+                    // Successfully relocalized, mark as localized and change state to viewing
+                    isLocalized = true
                     sessionState = .viewing
                     stateSubject.send(sessionState)
+                    Logger.shared.info("Successfully relocalized to environment, adding anchors", 
+                              destination: "Room Loading")
                     RoomService.shared.updateLoadingProgress(1.0, message: "Successfully relocalized!")
+                    
+                    // Now add the pending anchors if available
+                    addPendingAnchorsToScene()
                     
                     // Give a short delay to show the success message before hiding the loading screen
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
@@ -511,28 +596,34 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         if sessionState == .loading || sessionState == .viewing {
             switch camera.trackingState {
             case .notAvailable:
+                Logger.shared.warning("Tracking not available", destination: "AR Session")
                 statusSubject.send("Tracking not available")
                 RoomService.shared.updateLoadingProgress(0.2, message: "Tracking not available")
                 
             case .limited(let reason):
                 switch reason {
                 case .initializing:
+                    Logger.shared.info("Initializing AR session", destination: "AR Session")
                     statusSubject.send("Initializing AR session")
                     RoomService.shared.updateLoadingProgress(0.3, message: "Initializing AR session...")
                     
                 case .relocalizing:
+                    Logger.shared.info("Relocalizing - please move device slowly", destination: "AR Session")
                     statusSubject.send("Relocalizing - please move device slowly around the space")
                     RoomService.shared.updateLoadingProgress(0.5, message: "Relocalizing - move slowly around...")
                     
                 case .excessiveMotion:
+                    Logger.shared.warning("Too much motion detected", destination: "AR Session")
                     statusSubject.send("Too much motion - please slow down")
                     RoomService.shared.updateLoadingProgress(0.4, message: "Too much motion - please slow down")
                     
                 case .insufficientFeatures:
+                    Logger.shared.warning("Insufficient visual features", destination: "AR Session")
                     statusSubject.send("Not enough visual features - try to point at detailed surfaces")
                     RoomService.shared.updateLoadingProgress(0.4, message: "Not enough visual features")
                     
                 @unknown default:
+                    Logger.shared.warning("Unknown limited tracking reason", destination: "AR Session")
                     statusSubject.send("Limited tracking quality")
                     RoomService.shared.updateLoadingProgress(0.5, message: "Limited tracking quality")
                 }
@@ -540,16 +631,22 @@ class ARAnchorService: NSObject, ARSessionDelegate {
             case .normal:
                 if sessionState == .loading {
                     // Successfully relocalized to the environment
+                    isLocalized = true
                     sessionState = .viewing
                     stateSubject.send(sessionState)
+                    Logger.shared.info("Normal tracking achieved, session relocalized", destination: "AR Session")
                     statusSubject.send("Successfully relocalized to room environment")
                     RoomService.shared.updateLoadingProgress(1.0, message: "Successfully relocalized!")
+                    
+                    // Now add the pending anchors if available
+                    addPendingAnchorsToScene()
                     
                     // Give a short delay to show the success message before hiding loading screen
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                         RoomService.shared.updateLoadingProgress(1.0, message: "")
                     }
                 } else if sessionState == .viewing {
+                    Logger.shared.debug("Normal tracking maintained in viewing mode", destination: "AR Session")
                     statusSubject.send("Normal tracking - room loaded")
                 }
             }
