@@ -8,21 +8,26 @@ struct ARSphereView: UIViewRepresentable {
     func makeUIView(context: Context) -> ARSCNView {
         let arView = ARSCNView(frame: .zero)
         
-        // Configure AR view settings
-        // arView.automaticallyConfigureSession = false
+        // Configure scene to use less memory
+        let scene = SCNScene()
+        // Use lower quality rendering to reduce memory usage
+        scene.background.contents = UIColor.black
+        arView.scene = scene
+        arView.antialiasingMode = .none
+        
+        // Reduce scene complexity to save memory
+        arView.preferredFramesPerSecond = 30
+        arView.rendersContinuously = false
+        arView.automaticallyUpdatesLighting = false
+        
+        // Reduce texture memory usage
+        SCNTransaction.animationDuration = 0
         
         // Set delegate to handle rendering
         arView.delegate = context.coordinator
         
         // Set session
         arView.session = viewModel.getARSession()
-        
-        // Set debug options for visual debugging if needed
-        // arView.debugOptions = [.showFeaturePoints]
-        
-        // Configure scene
-        arView.scene.lightingEnvironment.contents = UIColor.white
-        arView.scene.lightingEnvironment.intensity = 1.0
         
         // Setup tap gesture recognizer
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
@@ -33,17 +38,37 @@ struct ARSphereView: UIViewRepresentable {
         longPressGesture.minimumPressDuration = 0.5
         arView.addGestureRecognizer(longPressGesture)
         
+        // Store reference to view
+        context.coordinator.arView = arView
+        
         return arView
     }
     
     func updateUIView(_ uiView: ARSCNView, context: Context) {
-        // Ensure we have the latest AR session
+        // Only update the session if needed to avoid "Attempting to enable an already-enabled session"
         if uiView.session !== viewModel.getARSession() {
+            // Pause previous session if any to prevent multiple active sessions
+            uiView.session.pause()
+            
+            // Set the new session
             uiView.session = viewModel.getARSession()
         }
         
-        // Update existing nodes if needed based on viewModel changes
-        // This is handled by the ARSCNViewDelegate
+        // Update rendering options based on session state
+        switch viewModel.sessionState {
+        case .idle:
+            // Use minimal rendering in idle state
+            uiView.rendersContinuously = false
+            uiView.autoenablesDefaultLighting = false
+            uiView.automaticallyUpdatesLighting = false
+            uiView.preferredFramesPerSecond = 15 // Lower FPS for idle
+        case .recording, .viewing:
+            // Better quality for active use
+            uiView.rendersContinuously = true
+            uiView.autoenablesDefaultLighting = true
+            uiView.automaticallyUpdatesLighting = true
+            uiView.preferredFramesPerSecond = 30
+        }
     }
     
     func makeCoordinator() -> Coordinator {
@@ -52,16 +77,36 @@ struct ARSphereView: UIViewRepresentable {
     
     class Coordinator: NSObject, ARSCNViewDelegate {
         var parent: ARSphereView
-        var arView: ARSCNView?
+        weak var arView: ARSCNView?
+        // Cache for node lookup to avoid repeated searches
+        var nodeCache = [UUID: SCNNode]()
+        // Shared sphere geometry to reduce memory usage
+        var sharedSphereGeometries = [Float: SCNSphere]()
         
         init(_ parent: ARSphereView) {
             self.parent = parent
             super.init()
         }
         
+        // Clean up resources when coordinator is deallocated
+        deinit {
+            clearNodeCache()
+        }
+        
+        // Clear the node cache to avoid memory leaks
+        func clearNodeCache() {
+            for (_, node) in nodeCache {
+                node.removeFromParentNode()
+            }
+            nodeCache.removeAll()
+            sharedSphereGeometries.removeAll()
+        }
+        
         // Handle tap gestures to add spheres
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
-            guard let arView = gesture.view as? ARSCNView,
+            // Only process taps if in recording mode
+            guard parent.viewModel.sessionState == .recording,
+                  let arView = gesture.view as? ARSCNView,
                   let frame = arView.session.currentFrame else { return }
             
             // Get tap location in the AR view
@@ -81,7 +126,9 @@ struct ARSphereView: UIViewRepresentable {
         
         // Handle long press gestures to remove spheres
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
-            guard gesture.state == .began,
+            // Only remove spheres if in recording mode
+            guard parent.viewModel.sessionState == .recording,
+                  gesture.state == .began,
                   let arView = gesture.view as? ARSCNView else { return }
             
             // Get press location in the AR view
@@ -93,9 +140,14 @@ struct ARSphereView: UIViewRepresentable {
             if let hitResult = hitTestResults.first,
                let node = hitResult.node.parent, // Parent node is the actual sphere node
                let identifier = node.name,
-               let anchor = parent.viewModel.sphereAnchors.first(where: { $0.identifier.uuidString == identifier }) {
+               let uuidString = identifier.isEmpty ? nil : identifier,
+               let uuid = UUID(uuidString: uuidString),
+               let anchor = parent.viewModel.sphereAnchors.first(where: { $0.identifier == uuid }) {
                 // Remove the anchor
                 parent.viewModel.removeSphere(anchor)
+                
+                // Remove from cache
+                nodeCache.removeValue(forKey: uuid)
             }
         }
         
@@ -105,17 +157,30 @@ struct ARSphereView: UIViewRepresentable {
             // Check if the anchor is a sphere anchor
             guard let sphereAnchor = anchor as? SphereAnchor else { return nil }
             
-            // Create a sphere geometry with the specified radius
-            let sphere = SCNSphere(radius: CGFloat(sphereAnchor.radius))
+            // Check if we already have a node for this anchor in the cache
+            if let existingNode = nodeCache[sphereAnchor.identifier] {
+                return existingNode
+            }
+            
+            // Reuse sphere geometry if we already have one with this radius
+            let sphere = sharedSphereGeometries[sphereAnchor.radius] ?? {
+                // Create a sphere geometry with the specified radius - use lower polygon count
+                let newSphere = SCNSphere(radius: CGFloat(sphereAnchor.radius))
+                newSphere.segmentCount = 8  // Reduce from default 48 to 8 to save memory
+                
+                // Cache for reuse
+                sharedSphereGeometries[sphereAnchor.radius] = newSphere
+                return newSphere
+            }()
             
             // Set the material properties
             let material = SCNMaterial()
             material.diffuse.contents = sphereAnchor.color
-            // Add some transparency to make it look better
             material.transparency = 0.8
+            material.lightingModel = .constant // Simpler lighting model to save memory
             
-            // Apply materials to sphere
-            sphere.materials = [material]
+            // Only use a single material to save memory
+            sphere.firstMaterial = material
             
             // Create a node with the sphere geometry
             let node = SCNNode(geometry: sphere)
@@ -127,6 +192,9 @@ struct ARSphereView: UIViewRepresentable {
             // Set the name to match anchor identifier for later reference
             parentNode.name = sphereAnchor.identifier.uuidString
             
+            // Add to cache
+            nodeCache[sphereAnchor.identifier] = parentNode
+            
             return parentNode
         }
         
@@ -137,11 +205,46 @@ struct ARSphereView: UIViewRepresentable {
                   let sphere = sphereNode.geometry as? SCNSphere else { return }
             
             // Update radius if changed
-            sphere.radius = CGFloat(sphereAnchor.radius)
+            if abs(sphere.radius - CGFloat(sphereAnchor.radius)) > 0.001 {
+                // Use shared geometry if already created
+                if let sharedSphere = sharedSphereGeometries[sphereAnchor.radius] {
+                    sphereNode.geometry = sharedSphere
+                } else {
+                    sphere.radius = CGFloat(sphereAnchor.radius)
+                    sharedSphereGeometries[sphereAnchor.radius] = sphere
+                }
+            }
             
-            // Update material if changed
-            if let material = sphere.materials.first {
+            // Update material if changed - only update when necessary
+            if let material = sphere.firstMaterial, 
+               let currentColor = material.diffuse.contents as? UIColor,
+               currentColor != sphereAnchor.color {
                 material.diffuse.contents = sphereAnchor.color
+            }
+            
+            // Update cache
+            nodeCache[sphereAnchor.identifier] = node
+        }
+        
+        func renderer(_ renderer: SCNSceneRenderer, didRemove node: SCNNode, for anchor: ARAnchor) {
+            // Remove from cache when node is removed
+            if let sphereAnchor = anchor as? SphereAnchor {
+                nodeCache.removeValue(forKey: sphereAnchor.identifier)
+            }
+        }
+        
+        // Optimize scene rendering
+        func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+            // Only render when needed based on app state
+            if let arView = self.arView {
+                switch parent.viewModel.sessionState {
+                case .idle:
+                    // Minimal rendering in idle state
+                    arView.isPlaying = false
+                case .recording, .viewing:
+                    // Active rendering in recording/viewing states
+                    arView.isPlaying = true
+                }
             }
         }
     }

@@ -27,6 +27,12 @@ class ScanningViewModel: ObservableObject {
         .red, .blue, .green, .yellow, .purple, .orange, .cyan, .magenta
     ]
     
+    // MARK: - Room Recording Methods
+    
+    // Add a property to track if we're showing the room dialog
+    @Published var isShowingNewRoomDialog: Bool = false
+    @Published var newRoomName: String = ""
+    
     // MARK: - Services
     private let arScanService = ARScanService()
     private let anchorService = ARAnchorService.shared
@@ -120,13 +126,14 @@ class ScanningViewModel: ObservableObject {
     func toggleSphereMode() {
         isSphereMode = !isSphereMode
         
-        // Display appropriate message
+        // Update status message without showing an alert
         if isSphereMode {
-            // Share the AR session with the anchor service
-            if let session = arScanService.getARSession() {
-                anchorService.setARSession(session)
-            }
-            showAlert(withMessage: "Sphere placement mode active. Tap to place spheres.")
+            // Instead of sharing the AR session, we'll use the anchorService directly
+            // Note: In the new implementation, the anchorService manages its own session
+            
+            // Just update the status message without showing an alert
+            alertMessage = "Sphere placement mode active. Tap to place spheres."
+            // No need to call showAlert
         }
     }
     
@@ -181,9 +188,14 @@ class ScanningViewModel: ObservableObject {
     
     /// Adds a sphere at the given position
     func addSphere(at transform: simd_float4x4) {
-        // Ensure AR session is properly set
+        // Ensure we're in sphere mode
         if !isSphereMode {
             toggleSphereMode()
+        }
+        
+        // Make sure we're recording before adding a sphere
+        if !ensureRecordingStarted() {
+            return
         }
         
         // Use the selected color
@@ -193,9 +205,14 @@ class ScanningViewModel: ObservableObject {
     
     /// Adds a sphere in front of the camera
     func addSphereInFrontOfCamera(frame: ARFrame) {
-        // Ensure AR session is properly set
+        // Ensure we're in sphere mode
         if !isSphereMode {
             toggleSphereMode()
+        }
+        
+        // Make sure we're recording before adding a sphere
+        if !ensureRecordingStarted() {
+            return
         }
         
         // Create a position 0.5 meters in front of the camera
@@ -211,6 +228,16 @@ class ScanningViewModel: ObservableObject {
     
     /// Adds a sphere at the current camera position
     func addSphereAtCameraPosition() {
+        // Ensure we're in sphere mode
+        if !isSphereMode {
+            toggleSphereMode()
+        }
+        
+        // Make sure we're recording before adding a sphere
+        if !ensureRecordingStarted() {
+            return
+        }
+        
         guard let session = arScanService.getARSession(),
               let frame = session.currentFrame else {
             showAlert(withMessage: "Cannot access camera position")
@@ -224,98 +251,31 @@ class ScanningViewModel: ObservableObject {
         let color = colorOptions[selectedColorIndex]
         anchorService.addSphereAnchor(at: cameraTransform, radius: sphereRadius, color: color)
         
-        showAlert(withMessage: "Sphere placed at camera position")
+        // Update status message without showing an alert
+        alertMessage = "Sphere placed at camera position"
     }
     
     /// Saves the current AR world map with all sphere anchors
     func saveARWorldMap() {
-        guard let session = arScanService.getARSession() else {
-            showAlert(withMessage: "Cannot access AR session")
+        // Check if we have any sphere anchors
+        if sphereAnchors.isEmpty {
+            showAlert(withMessage: "No dots placed in this recording. Place at least one dot to save.")
             return
         }
         
-        // Make sure we're in sphere mode
-        if !isSphereMode {
-            toggleSphereMode()
-        }
-        
-        // Request current world map from the session
-        isSaving = true
-        session.getCurrentWorldMap { [weak self] (worldMap, error) in
-            guard let self = self else { return }
-            
-            DispatchQueue.main.async {
-                self.isSaving = false
-                
-                if let error = error {
-                    self.showAlert(withMessage: "Failed to get world map: \(error.localizedDescription)")
-                    return
-                }
-                
-                guard let worldMap = worldMap else {
-                    self.showAlert(withMessage: "World map is empty")
-                    return
-                }
-                
-                // Check if we have any sphere anchors
-                let sphereAnchors = self.sphereAnchors
-                if sphereAnchors.isEmpty {
-                    self.showAlert(withMessage: "No dots placed in this recording. Place at least one dot to save.")
-                    return
-                }
-                
-                // Save the world map
-                do {
-                    // Archive the world map
-                    let data = try NSKeyedArchiver.archivedData(withRootObject: worldMap, requiringSecureCoding: true)
-                    
-                    // Create directory for the scan
-                    let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-                    let arScansDirectory = documentsDirectory.appendingPathComponent("ARScans")
-                    
-                    // Make sure the ARScans directory exists
-                    if !FileManager.default.fileExists(atPath: arScansDirectory.path) {
-                        try FileManager.default.createDirectory(at: arScansDirectory, withIntermediateDirectories: true, attributes: nil)
-                    }
-                    
-                    // Create a unique directory for this scan
-                    let dateFormatter = DateFormatter()
-                    dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-                    let timestamp = dateFormatter.string(from: Date())
-                    let scanDirName = "Scan_\(timestamp)"
-                    let scanDirectory = arScansDirectory.appendingPathComponent(scanDirName)
-                    
-                    try FileManager.default.createDirectory(at: scanDirectory, withIntermediateDirectories: true, attributes: nil)
-                    
-                    // Save the world map to the scan directory
-                    let worldMapURL = scanDirectory.appendingPathComponent("worldmap.arworldmap")
-                    try data.write(to: worldMapURL)
-                    
-                    // Create a scan model and save it
-                    let scanName = "AR Scan \(timestamp)"
-                    let currentDate = Date()
-                    let scanModel = ScanModel(
-                        id: UUID(),
-                        name: scanName,
-                        fileURL: scanDirectory,
-                        creationDate: currentDate,
-                        fileExtension: "arworldmap",
-                        fileSize: Int64(data.count)
-                    )
-                    
-                    // Save scan info
-                    if let infoData = try? JSONEncoder().encode(scanModel) {
-                        let infoURL = scanDirectory.appendingPathComponent("info.json")
-                        try infoData.write(to: infoURL)
-                    }
-                    
-                    self.lastSavedURL = scanDirectory
-                    self.showAlert(withMessage: "Saved AR world map with \(self.sphereAnchors.count) dots. You can now view it in Saved Scans.")
-                    
-                } catch {
-                    self.showAlert(withMessage: "Failed to save world map: \(error.localizedDescription)")
-                }
+        // In our new implementation, saving is handled by the ARAnchorService
+        // We should check if we're already recording
+        if anchorService.sessionState == .recording {
+            // If we're recording, stop recording to save
+            if anchorService.stopRecording() {
+                showAlert(withMessage: "Room saved with \(sphereAnchors.count) dots.")
+            } else {
+                showAlert(withMessage: "Failed to save room.")
             }
+        } else {
+            // If we're not recording, we need to start a recording first
+            // Show a dialog to enter room name
+            showAlert(withMessage: "Please start recording a room first using the AR Rooms tab.")
         }
     }
     
@@ -341,6 +301,38 @@ class ScanningViewModel: ObservableObject {
     var selectedSwiftUIColor: Color {
         guard selectedColorIndex < colorOptions.count else { return Color.red }
         return Color(colorOptions[selectedColorIndex])
+    }
+    
+    // MARK: - Room Recording Methods
+    
+    /// Start recording a new room
+    func startRecordingRoom() {
+        if !newRoomName.isEmpty {
+            if anchorService.startRecording(roomName: newRoomName) {
+                newRoomName = ""
+                isShowingNewRoomDialog = false
+                
+                // Also enable sphere mode automatically
+                if !isSphereMode {
+                    toggleSphereMode()
+                }
+                
+                // Update status message
+                alertMessage = "Recording started for room: \(newRoomName). Tap to place spheres."
+            }
+        } else {
+            showAlert(withMessage: "Please enter a room name first")
+        }
+    }
+    
+    /// Check and start recording if needed
+    func ensureRecordingStarted() -> Bool {
+        if anchorService.sessionState != .recording {
+            // Need to start a recording session
+            isShowingNewRoomDialog = true
+            return false
+        }
+        return true
     }
     
     // MARK: - Private Methods

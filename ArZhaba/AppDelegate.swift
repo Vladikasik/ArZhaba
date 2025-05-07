@@ -15,6 +15,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        // Set memory usage limits
+        setMemoryUsageLimits()
         
         // Create the SwiftUI view that provides the window contents.
         let contentView = MainView()
@@ -27,15 +29,42 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         
         return true
     }
+    
+    private func setMemoryUsageLimits() {
+        // Limit memory usage by setting image cache capacity
+        URLCache.shared.memoryCapacity = 5 * 1024 * 1024 // 5 MB
+        URLCache.shared.diskCapacity = 20 * 1024 * 1024 // 20 MB
+        
+        // Register for memory warning notifications
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleMemoryWarning),
+            name: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil
+        )
+    }
+    
+    @objc func handleMemoryWarning() {
+        // Release memory when receiving memory warning
+        URLCache.shared.removeAllCachedResponses()
+        
+        // Force a garbage collection cycle (this doesn't directly trigger GC, but helps)
+        autoreleasepool {
+            // Empty autorelease pool to help with memory pressure
+        }
+        
+        // Log memory warning
+        print("Memory warning received - clearing caches")
+    }
 
     func applicationWillResignActive(_ application: UIApplication) {
-        // Sent when the application is about to move from active to inactive state. This can occur for certain types of temporary interruptions (such as an incoming phone call or SMS message) or when the user quits the application and it begins the transition to the background state.
-        // No need to explicitly stop AR session - the ScanningViewModel will handle this via view lifecycle methods
+        // Pause AR sessions when app resigns active state
+        ARAnchorService.shared.returnToIdle()
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
-        // Use this method to release shared resources, save user data, invalidate timers, and store enough application state information to restore your application to its current state in case it is terminated later.
-        // No need to explicitly stop AR session - the ScanningViewModel will handle this via view lifecycle methods
+        // Clear caches when moving to background
+        URLCache.shared.removeAllCachedResponses()
     }
 
     func applicationWillEnterForeground(_ application: UIApplication) {
@@ -45,6 +74,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func applicationDidBecomeActive(_ application: UIApplication) {
         // Restart any tasks that were paused (or not yet started) while the application was inactive. If the application was previously in the background, optionally refresh the user interface.
         // Don't automatically restart scanning, let the user decide when to start
+    }
+
+    func applicationWillTerminate(_ application: UIApplication) {
+        // Clean up resources before termination
+        NotificationCenter.default.removeObserver(self)
     }
 }
 

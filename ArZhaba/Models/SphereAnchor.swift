@@ -29,18 +29,28 @@ class SphereAnchor: ARAnchor {
     
     enum CodingKeys: String, CodingKey {
         case radius
-        case colorComponents
+        case red
+        case green
+        case blue
+        case alpha
     }
     
     required init?(coder aDecoder: NSCoder) {
-        self.radius = aDecoder.decodeFloat(forKey: CodingKeys.radius.rawValue)
+        // Decode radius with a default value to handle potential missing data
+        self.radius = aDecoder.containsValue(forKey: CodingKeys.radius.rawValue) ? 
+                     aDecoder.decodeFloat(forKey: CodingKeys.radius.rawValue) : 0.025
         
-        if let components = aDecoder.decodeObject(of: [NSArray.self], forKey: CodingKeys.colorComponents.rawValue) as? [CGFloat],
-           components.count == 4 {
-            self.color = UIColor(red: components[0], green: components[1], blue: components[2], alpha: components[3])
-        } else {
-            self.color = .red
-        }
+        // More efficient color decoding - store components directly rather than as array
+        let red = aDecoder.containsValue(forKey: CodingKeys.red.rawValue) ? 
+                 CGFloat(aDecoder.decodeFloat(forKey: CodingKeys.red.rawValue)) : 1.0
+        let green = aDecoder.containsValue(forKey: CodingKeys.green.rawValue) ? 
+                   CGFloat(aDecoder.decodeFloat(forKey: CodingKeys.green.rawValue)) : 0.0
+        let blue = aDecoder.containsValue(forKey: CodingKeys.blue.rawValue) ? 
+                  CGFloat(aDecoder.decodeFloat(forKey: CodingKeys.blue.rawValue)) : 0.0
+        let alpha = aDecoder.containsValue(forKey: CodingKeys.alpha.rawValue) ? 
+                   CGFloat(aDecoder.decodeFloat(forKey: CodingKeys.alpha.rawValue)) : 1.0
+        
+        self.color = UIColor(red: red, green: green, blue: blue, alpha: alpha)
         
         super.init(coder: aDecoder)
     }
@@ -48,16 +58,21 @@ class SphereAnchor: ARAnchor {
     override func encode(with aCoder: NSCoder) {
         super.encode(with: aCoder)
         
+        // Encode the radius
         aCoder.encode(radius, forKey: CodingKeys.radius.rawValue)
         
+        // More efficiently encode color components directly
         var r: CGFloat = 0
         var g: CGFloat = 0
         var b: CGFloat = 0
         var a: CGFloat = 0
         
         color.getRed(&r, green: &g, blue: &b, alpha: &a)
-        let components: [CGFloat] = [r, g, b, a]
         
-        aCoder.encode(components, forKey: CodingKeys.colorComponents.rawValue)
+        // Store as individual floats rather than an array to reduce overhead
+        aCoder.encode(Float(r), forKey: CodingKeys.red.rawValue)
+        aCoder.encode(Float(g), forKey: CodingKeys.green.rawValue)
+        aCoder.encode(Float(b), forKey: CodingKeys.blue.rawValue)
+        aCoder.encode(Float(a), forKey: CodingKeys.alpha.rawValue)
     }
 } 

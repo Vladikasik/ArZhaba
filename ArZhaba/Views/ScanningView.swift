@@ -135,6 +135,39 @@ struct ScanningView: View {
                 dismissButton: .default(Text("OK"))
             )
         }
+        .sheet(isPresented: $viewModel.isShowingNewRoomDialog) {
+            // Room name dialog
+            NewRoomView(viewModel: viewModel)
+        }
+    }
+}
+
+struct NewRoomView: View {
+    @ObservedObject var viewModel: ScanningViewModel
+    
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("Enter room name to start recording")) {
+                    TextField("Room name", text: $viewModel.newRoomName)
+                }
+                
+                Section {
+                    Button("Start Recording") {
+                        viewModel.startRecordingRoom()
+                    }
+                    .disabled(viewModel.newRoomName.isEmpty)
+                }
+            }
+            .navigationTitle("New Room")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Cancel") {
+                        viewModel.isShowingNewRoomDialog = false
+                    }
+                }
+            }
+        }
     }
 }
 

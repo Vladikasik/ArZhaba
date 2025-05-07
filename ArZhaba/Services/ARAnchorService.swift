@@ -4,29 +4,39 @@ import Combine
 import RealityKit
 import UIKit
 
+/// Represents the current state of the AR session
+enum ARSessionState {
+    case idle       // Not recording or viewing, just tracking
+    case recording  // Recording anchors in current session
+    case viewing    // Viewing anchors from a loaded room
+}
+
 class ARAnchorService: NSObject, ARSessionDelegate {
     // MARK: - Singleton
     static let shared = ARAnchorService()
     
     // MARK: - Properties
     private var arSession: ARSession?
-    private var worldMapURL: URL? {
-        // Use the app's document directory to store the ARWorldMap
-        guard let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
-        return documentsDirectory.appendingPathComponent("worldMap.arworldmap")
-    }
     
-    private var anchorsURL: URL? {
-        // Store anchors in the app's documents directory
-        guard let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return nil }
-        return documentsDirectory.appendingPathComponent("anchors.data")
-    }
+    // Session state
+    private(set) var sessionState: ARSessionState = .idle
+    private var currentRoom: RoomModel?
     
+    // Sphere anchors collection
     private var sphereAnchors: [SphereAnchor] = []
     
     // Publishers
     private let anchorsSubject = CurrentValueSubject<[SphereAnchor], Never>([])
     private let statusSubject = PassthroughSubject<String, Never>()
+    private let stateSubject = CurrentValueSubject<ARSessionState, Never>(.idle)
+    private let currentRoomSubject = CurrentValueSubject<RoomModel?, Never>(nil)
+    
+    // World map save throttling
+    private var lastWorldMapSaveTime: Date = Date(timeIntervalSince1970: 0)
+    private let worldMapSaveInterval: TimeInterval = 5.0 // Save at most every 5 seconds
+    
+    // Track if session is active to prevent redundant calls
+    private var isSessionActive = false
     
     var anchorsPublisher: AnyPublisher<[SphereAnchor], Never> {
         anchorsSubject.eraseToAnyPublisher()
@@ -36,20 +46,33 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         statusSubject.eraseToAnyPublisher()
     }
     
+    var statePublisher: AnyPublisher<ARSessionState, Never> {
+        stateSubject.eraseToAnyPublisher()
+    }
+    
+    var currentRoomPublisher: AnyPublisher<RoomModel?, Never> {
+        currentRoomSubject.eraseToAnyPublisher()
+    }
+    
     // MARK: - Initialization
     private override init() {
         super.init()
-        loadAnchors()
     }
     
     // MARK: - Public Methods
     
     /// Sets up a new AR session with a new configuration
     func setupARSession() -> ARSession {
-        // Create a new ARSession
-        let session = ARSession()
-        arSession = session
-        session.delegate = self
+        // Create a new ARSession if needed
+        if arSession == nil {
+            arSession = ARSession()
+            arSession?.delegate = self
+        }
+        
+        // Return existing session if already active to avoid "already-enabled session" errors
+        guard !isSessionActive else {
+            return arSession!
+        }
         
         // Create a configuration suitable for our use case
         let configuration = ARWorldTrackingConfiguration()
@@ -60,36 +83,170 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         // Enable LiDAR features if available
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
             configuration.sceneReconstruction = .mesh
-            configuration.frameSemantics.insert(.smoothedSceneDepth)
+            // Only use depth when needed to save memory
+            if sessionState == .recording {
+                configuration.frameSemantics.insert(.smoothedSceneDepth)
+            }
         }
         
         // Start the session with this configuration
-        session.run(configuration)
+        arSession?.run(configuration)
+        isSessionActive = true
         
         // Update status
         statusSubject.send("AR session initialized")
         
-        return session
+        return arSession!
     }
     
-    /// Sets an existing AR session to be used by the anchor service
-    /// - Parameter session: The AR session to use
-    func setARSession(_ session: ARSession) {
-        // Set the delegate to self to handle anchor events
-        session.delegate = self
-        self.arSession = session
-        
-        // Load existing anchors into the session
-        for anchor in sphereAnchors {
-            session.add(anchor: anchor)
+    /// Starts recording a new room
+    func startRecording(roomName: String) -> Bool {
+        // Check if we're already recording
+        if sessionState == .recording {
+            statusSubject.send("Already recording")
+            return false
         }
         
-        // Send status update
-        statusSubject.send("AR session updated")
+        // Create a new room
+        guard let room = RoomService.shared.createRoom(name: roomName) else {
+            statusSubject.send("Failed to create room")
+            return false
+        }
+        
+        // Update state
+        sessionState = .recording
+        currentRoom = room
+        stateSubject.send(sessionState)
+        currentRoomSubject.send(currentRoom)
+        
+        // Clear all existing anchors
+        clearAllSphereAnchors()
+        
+        // Ensure we have a valid session
+        if arSession == nil {
+            arSession = ARSession()
+            arSession?.delegate = self
+        }
+        
+        // Restart session with recording configuration
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.planeDetection = [.horizontal, .vertical]
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+            configuration.sceneReconstruction = .mesh
+            configuration.frameSemantics.insert(.smoothedSceneDepth)
+        }
+        
+        arSession?.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        isSessionActive = true
+        
+        statusSubject.send("Started recording in room: \(roomName)")
+        return true
+    }
+    
+    /// Stops recording and saves the current session
+    func stopRecording() -> Bool {
+        // Check if we're currently recording
+        guard sessionState == .recording, let room = currentRoom else {
+            statusSubject.send("Not currently recording")
+            return false
+        }
+        
+        // Save the current world map to the room
+        saveCurrentWorldMapToRoom(room)
+        
+        // Save anchors to the room
+        RoomService.shared.saveAnchors(sphereAnchors, to: room)
+        
+        // Update state to idle
+        sessionState = .idle
+        stateSubject.send(sessionState)
+        
+        // Pause session to save power and memory
+        arSession?.pause()
+        isSessionActive = false
+        
+        // Clear all anchors from the scene
+        clearAllSphereAnchors()
+        
+        statusSubject.send("Recording stopped and saved")
+        return true
+    }
+    
+    /// Loads a room for viewing
+    func loadRoom(_ room: RoomModel) -> Bool {
+        // Make sure we have a session
+        if arSession == nil {
+            arSession = ARSession()
+            arSession?.delegate = self
+        }
+        
+        // Try to load the world map
+        guard let worldMap = RoomService.shared.loadWorldMap(from: room) else {
+            statusSubject.send("Failed to load world map from room: \(room.name)")
+            return false
+        }
+        
+        // Clear existing anchors
+        clearAllSphereAnchors()
+        
+        // Load anchors from the room
+        if let loadedAnchors = RoomService.shared.loadAnchors(from: room) {
+            // Store anchors but don't add them to the session yet - they'll be added when the world map is localized
+            sphereAnchors = loadedAnchors
+            anchorsSubject.send(sphereAnchors)
+        }
+        
+        // Create configuration with the world map
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.planeDetection = [.horizontal, .vertical]
+        configuration.initialWorldMap = worldMap
+        
+        // Enable LiDAR features if available but be more conservative
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+            configuration.sceneReconstruction = .mesh
+            // Don't use depth sensing to save memory
+        }
+        
+        // Run session with this configuration
+        arSession?.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        isSessionActive = true
+        
+        // Update state
+        sessionState = .viewing
+        currentRoom = room
+        stateSubject.send(sessionState)
+        currentRoomSubject.send(currentRoom)
+        
+        statusSubject.send("Loading room: \(room.name). Please move the device to localize...")
+        return true
+    }
+    
+    /// Returns to idle state, clearing the scene
+    func returnToIdle() {
+        // Pause the session to save resources
+        arSession?.pause()
+        isSessionActive = false
+        
+        // Clear all anchors
+        clearAllSphereAnchors()
+        
+        // Update state
+        sessionState = .idle
+        currentRoom = nil
+        stateSubject.send(sessionState)
+        currentRoomSubject.send(currentRoom)
+        
+        statusSubject.send("Returned to idle state")
     }
     
     /// Adds a sphere anchor at the specified position
     func addSphereAnchor(at transform: simd_float4x4, radius: Float = 0.025, color: UIColor = .red) {
+        // Only allow adding anchors in recording mode
+        guard sessionState == .recording else {
+            statusSubject.send("Can only add anchors in recording mode")
+            return
+        }
+        
         let anchor = SphereAnchor(transform: transform, radius: radius, color: color)
         
         // Add anchor to AR session
@@ -99,15 +256,25 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         sphereAnchors.append(anchor)
         anchorsSubject.send(sphereAnchors)
         
-        // Save the updated anchors
-        saveAnchors()
+        // Notify of success
+        statusSubject.send("Added sphere anchor")
         
-        // Try to save the world map when a new anchor is added
-        saveWorldMap()
+        // Save the world map periodically with throttling to avoid memory pressure
+        if Date().timeIntervalSince(lastWorldMapSaveTime) >= worldMapSaveInterval,
+           let room = currentRoom {
+            saveCurrentWorldMapToRoom(room)
+            lastWorldMapSaveTime = Date()
+        }
     }
     
     /// Removes a sphere anchor
     func removeSphereAnchor(_ anchor: SphereAnchor) {
+        // Only allow removing anchors in recording mode
+        guard sessionState == .recording else {
+            statusSubject.send("Can only remove anchors in recording mode")
+            return
+        }
+        
         // Remove from AR session
         arSession?.remove(anchor: anchor)
         
@@ -115,11 +282,12 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         sphereAnchors.removeAll { $0.identifier == anchor.identifier }
         anchorsSubject.send(sphereAnchors)
         
-        // Save the updated anchors
-        saveAnchors()
-        
-        // Try to save the world map when an anchor is removed
-        saveWorldMap()
+        // Save the world map with throttling to reduce memory pressure
+        if Date().timeIntervalSince(lastWorldMapSaveTime) >= worldMapSaveInterval,
+           let room = currentRoom {
+            saveCurrentWorldMapToRoom(room)
+            lastWorldMapSaveTime = Date()
+        }
     }
     
     /// Clears all sphere anchors
@@ -132,115 +300,59 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         // Clear local collection
         sphereAnchors.removeAll()
         anchorsSubject.send(sphereAnchors)
-        
-        // Save the updated anchors (empty now)
-        saveAnchors()
-        
-        // Try to save the world map when all anchors are cleared
-        saveWorldMap()
-    }
-    
-    /// Saves the current AR world map
-    func saveWorldMap() {
-        guard let worldMapURL = worldMapURL else {
-            statusSubject.send("Error: Could not create world map URL")
-            return
-        }
-        
-        arSession?.getCurrentWorldMap { [weak self] worldMap, error in
-            guard let self = self else { return }
-            
-            if let error = error {
-                self.statusSubject.send("Error getting world map: \(error.localizedDescription)")
-                return
-            }
-            
-            guard let map = worldMap else {
-                self.statusSubject.send("Error: No world map available")
-                return
-            }
-            
-            do {
-                let data = try NSKeyedArchiver.archivedData(withRootObject: map, requiringSecureCoding: true)
-                try data.write(to: worldMapURL, options: [.atomic])
-                self.statusSubject.send("World map saved successfully")
-            } catch {
-                self.statusSubject.send("Error saving world map: \(error.localizedDescription)")
-            }
-        }
     }
     
     // MARK: - Private Methods
     
-    /// Loads an AR world map and applies it to the provided configuration
-    private func loadWorldMap(for configuration: ARWorldTrackingConfiguration) {
-        guard let worldMapURL = worldMapURL,
-              FileManager.default.fileExists(atPath: worldMapURL.path) else {
+    /// Saves the current world map to the specified room
+    private func saveCurrentWorldMapToRoom(_ room: RoomModel) {
+        // Make sure we have an active session before trying to save the world map
+        guard isSessionActive else {
+            statusSubject.send("Cannot save world map - AR session not active")
             return
         }
         
-        do {
-            let data = try Data(contentsOf: worldMapURL)
-            guard let worldMap = try NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data) else {
-                statusSubject.send("Error: Could not unarchive world map")
-                return
-            }
+        // Use a low priority queue to reduce UI impact
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
             
-            // Set the world map in the configuration
-            configuration.initialWorldMap = worldMap
-            statusSubject.send("World map loaded successfully")
-        } catch {
-            statusSubject.send("Error loading world map: \(error.localizedDescription)")
-        }
-    }
-    
-    /// Saves the current anchors to a file
-    private func saveAnchors() {
-        guard let anchorsURL = anchorsURL else {
-            statusSubject.send("Error: Could not create anchors URL")
-            return
-        }
-        
-        do {
-            let data = try NSKeyedArchiver.archivedData(withRootObject: sphereAnchors, requiringSecureCoding: true)
-            try data.write(to: anchorsURL, options: [.atomic])
-        } catch {
-            statusSubject.send("Error saving anchors: \(error.localizedDescription)")
-        }
-    }
-    
-    /// Loads anchors from file
-    private func loadAnchors() {
-        guard let anchorsURL = anchorsURL,
-              FileManager.default.fileExists(atPath: anchorsURL.path) else {
-            return
-        }
-        
-        do {
-            let data = try Data(contentsOf: anchorsURL)
-            if let loadedAnchors = try NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(data) as? [SphereAnchor] {
-                self.sphereAnchors = loadedAnchors
-                self.anchorsSubject.send(loadedAnchors)
+            self.arSession?.getCurrentWorldMap { [weak self] worldMap, error in
+                guard let self = self else { return }
+                
+                if let error = error {
+                    self.statusSubject.send("Error getting world map: \(error.localizedDescription)")
+                    return
+                }
+                
+                guard let map = worldMap else {
+                    self.statusSubject.send("No world map available")
+                    return
+                }
+                
+                // Save to the room
+                RoomService.shared.saveWorldMap(map, to: room)
+                
+                // Update timestamp
+                self.lastWorldMapSaveTime = Date()
             }
-        } catch {
-            statusSubject.send("Error loading anchors: \(error.localizedDescription)")
         }
     }
     
     // MARK: - ARSessionDelegate Methods
     
     func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
-        // Process newly added anchors
+        // Track only sphere anchors to save memory
         let newSphereAnchors = anchors.compactMap { $0 as? SphereAnchor }
         
-        for anchor in newSphereAnchors {
-            // Only add if not already in our collection
-            if !sphereAnchors.contains(where: { $0.identifier == anchor.identifier }) {
-                sphereAnchors.append(anchor)
-            }
-        }
-        
         if !newSphereAnchors.isEmpty {
+            // Only add if not already in our collection
+            for anchor in newSphereAnchors {
+                if !sphereAnchors.contains(where: { $0.identifier == anchor.identifier }) {
+                    sphereAnchors.append(anchor)
+                }
+            }
+            
+            // Notify subscribers of the change
             anchorsSubject.send(sphereAnchors)
         }
     }
@@ -248,22 +360,37 @@ class ARAnchorService: NSObject, ARSessionDelegate {
     func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
         // Process removed anchors
         let removedIds = anchors.map { $0.identifier }
+        let hadSpheres = !sphereAnchors.filter { removedIds.contains($0.identifier) }.isEmpty
+        
         sphereAnchors.removeAll { removedIds.contains($0.identifier) }
-        anchorsSubject.send(sphereAnchors)
+        
+        if hadSpheres {
+            anchorsSubject.send(sphereAnchors)
+        }
     }
     
     func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
-        // Notify about tracking state changes for relocalization feedback
-        NotificationCenter.default.post(
-            name: NSNotification.Name("ARTrackingStateChanged"),
-            object: nil,
-            userInfo: ["trackingState": camera.trackingState]
-        )
+        // If we're in viewing mode and tracking becomes normal,
+        // add all the sphere anchors to the session
+        if sessionState == .viewing && camera.trackingState == .normal {
+            for anchor in sphereAnchors {
+                if !session.currentFrame!.anchors.contains(where: { $0.identifier == anchor.identifier }) {
+                    session.add(anchor: anchor)
+                }
+            }
+        }
         
-        // Also update status message
+        // Update status message
         switch camera.trackingState {
         case .normal:
-            statusSubject.send("Tracking normal - AR anchors active")
+            switch sessionState {
+            case .idle:
+                statusSubject.send("Ready to record or load a room")
+            case .recording:
+                statusSubject.send("Recording - Add sphere anchors by tapping")
+            case .viewing:
+                statusSubject.send("Viewing room - Spheres will appear when anchors are found")
+            }
         case .limited(let reason):
             var message = "Limited tracking: "
             switch reason {
@@ -288,19 +415,25 @@ class ARAnchorService: NSObject, ARSessionDelegate {
     
     func session(_ session: ARSession, didFailWithError error: Error) {
         statusSubject.send("AR session failed: \(error.localizedDescription)")
+        isSessionActive = false
     }
     
     func sessionWasInterrupted(_ session: ARSession) {
         statusSubject.send("AR session was interrupted")
+        isSessionActive = false
     }
     
     func sessionInterruptionEnded(_ session: ARSession) {
         statusSubject.send("AR session interruption ended")
+        isSessionActive = true
         
-        // Try to relocalize to the saved world map
-        if let configuration = session.configuration as? ARWorldTrackingConfiguration {
-            loadWorldMap(for: configuration)
-            session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        // If we're in viewing mode, try to relocalize
+        if sessionState == .viewing, let room = currentRoom {
+            loadRoom(room)
         }
+    }
+    
+    func session(_ session: ARSession, didOutputCollaborationData data: ARSession.CollaborationData) {
+        // This would be used for multi-user experiences, but we're not implementing that yet
     }
 } 
