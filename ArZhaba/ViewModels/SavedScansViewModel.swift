@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import ARKit
 
 class SavedScansViewModel: ObservableObject {
     // MARK: - Published Properties
@@ -12,6 +13,7 @@ class SavedScansViewModel: ObservableObject {
     
     // MARK: - Services
     private let scanFileService = ScanFileService.shared
+    private let anchorService = ARAnchorService.shared
     private var cancellables = Set<AnyCancellable>()
     
     // MARK: - Initialization
@@ -39,6 +41,35 @@ class SavedScansViewModel: ObservableObject {
     func loadScans() {
         isLoading = true
         scanFileService.loadSavedScans()
+    }
+    
+    /// Loads a specific saved scan and its AR world map
+    func loadScan(_ scan: ScanModel) {
+        // Setup a new AR session from the anchor service instead of getting an existing one
+        let session = anchorService.setupARSession()
+        
+        do {
+            // Attempt to load the saved AR world map
+            let config = ARWorldTrackingConfiguration()
+            
+            // Try to load world map data from file
+            let worldMapURL = scan.fileURL.appendingPathComponent("worldmap.arworldmap")
+            if let data = try? Data(contentsOf: worldMapURL),
+               let worldMap = try NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data) {
+                
+                // Use the loaded world map
+                config.initialWorldMap = worldMap
+                showAlert(withMessage: "Loading saved anchors. Please align your device with the environment.")
+            } else {
+                showAlert(withMessage: "No world map found for this scan")
+                return
+            }
+            
+            // Run the session with the configuration
+            session.run(config)
+        } catch {
+            showAlert(withMessage: "Failed to load scan: \(error.localizedDescription)")
+        }
     }
     
     /// Deletes a scan
