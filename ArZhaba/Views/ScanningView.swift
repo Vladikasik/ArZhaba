@@ -22,7 +22,7 @@ struct ScanningView: View {
                         .frame(height: 50)
                     
                     HStack {
-                        Text(viewModel.scanSession.state == .scanning ? "Scanning in progress" : "Tap to place spheres")
+                        Text(viewModel.scanSession.state == .scanning ? "Recording in progress" : "Tap Record to start")
                             .foregroundColor(.white)
                             .font(.headline)
                             .padding(.leading)
@@ -49,6 +49,26 @@ struct ScanningView: View {
                         .padding(8)
                         .background(Color.black.opacity(0.6))
                         .cornerRadius(8)
+                    
+                    // Add Sphere button (only visible when recording)
+                    Button(action: {
+                        viewModel.addSphereAtCameraPosition()
+                    }) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 60, height: 60)
+                            Circle()
+                                .stroke(Color.white, lineWidth: 2)
+                                .frame(width: 60, height: 60)
+                            Text("Add Dot")
+                                .foregroundColor(.white)
+                                .font(.caption)
+                        }
+                    }
+                    .padding()
+                    .background(Color.black.opacity(0.7))
+                    .cornerRadius(15)
                 }
                 
                 Spacer()
@@ -59,8 +79,16 @@ struct ScanningView: View {
                     Button(action: {
                         if viewModel.scanSession.state == .scanning {
                             viewModel.stopScanning()
+                            // Auto-save after stopping recording
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                viewModel.saveARWorldMap()
+                            }
                         } else {
                             viewModel.startScanning()
+                            // Enable sphere mode automatically when recording starts
+                            if !viewModel.isSphereMode {
+                                viewModel.toggleSphereMode()
+                            }
                         }
                     }) {
                         Circle()
@@ -73,33 +101,6 @@ struct ScanningView: View {
                                     .frame(width: 30, height: 30)
                                     .foregroundColor(.white)
                             )
-                    }
-                    
-                    // Place Spheres button
-                    Button(action: {
-                        viewModel.toggleSphereMode()
-                    }) {
-                        VStack {
-                            Image(systemName: "circle.grid.3x3.fill")
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(width: 30, height: 30)
-                                .foregroundColor(.yellow)
-                            Text("Place Spheres")
-                                .font(.caption)
-                                .foregroundColor(.white)
-                        }
-                    }
-                    
-                    // Save button
-                    Button(action: {
-                        showSaveDialog = true
-                    }) {
-                        Image(systemName: "arrow.down.circle")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 30, height: 30)
-                            .foregroundColor(.white)
                     }
                 }
                 .padding()
@@ -119,7 +120,13 @@ struct ScanningView: View {
         }
         .onDisappear {
             // Make sure scanning stops when leaving this view
-            viewModel.stopScanning()
+            if viewModel.scanSession.state == .scanning {
+                viewModel.stopScanning()
+                // Auto-save after stopping recording
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    viewModel.saveARWorldMap()
+                }
+            }
         }
         .alert(isPresented: $viewModel.showAlert) {
             Alert(
@@ -127,9 +134,6 @@ struct ScanningView: View {
                 message: Text(viewModel.alertMessage),
                 dismissButton: .default(Text("OK"))
             )
-        }
-        .sheet(isPresented: $showSaveDialog) {
-            SaveScanView(isPresented: $showSaveDialog, scanName: $scanName)
         }
     }
 }

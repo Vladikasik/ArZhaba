@@ -158,21 +158,82 @@ class ScanFileService {
     /// Reload the list of saved scans
     func loadSavedScans() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self, let scansDirectory = self.scansDirectoryURL else {
+            guard let self = self else { return }
+            
+            // Get ARScans directory
+            guard let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
                 return
             }
             
+            let arScansDirectory = documentsDirectory.appendingPathComponent("ARScans")
+            
+            // Make sure the ARScans directory exists
+            if !FileManager.default.fileExists(atPath: arScansDirectory.path) {
+                do {
+                    try FileManager.default.createDirectory(at: arScansDirectory, withIntermediateDirectories: true, attributes: nil)
+                } catch {
+                    print("Failed to create ARScans directory: \(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        self.scansSubject.send([])
+                    }
+                    return
+                }
+            }
+            
             do {
-                let fileURLs = try FileManager.default.contentsOfDirectory(at: scansDirectory, 
-                                                                          includingPropertiesForKeys: [.creationDateKey, .fileSizeKey], 
+                // Get all subdirectories inside ARScans
+                let fileURLs = try FileManager.default.contentsOfDirectory(at: arScansDirectory, 
+                                                                          includingPropertiesForKeys: [.creationDateKey, .isDirectoryKey], 
                                                                           options: .skipsHiddenFiles)
-                let validFileURLs = fileURLs.filter { $0.pathExtension == "obj" || $0.pathExtension == "usdz" }
+                
+                // Filter to only get directories
+                let directories = try fileURLs.filter { 
+                    try $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true 
+                }
                 
                 // Convert URLs to ScanModel objects
                 var scanModels: [ScanModel] = []
-                for url in validFileURLs {
-                    if let scanModel = ScanModel.from(url: url) {
-                        scanModels.append(scanModel)
+                
+                for directory in directories {
+                    // Check if it contains a worldmap file
+                    let worldMapURL = directory.appendingPathComponent("worldmap.arworldmap")
+                    if FileManager.default.fileExists(atPath: worldMapURL.path) {
+                        // Check if there's a saved info.json file
+                        let infoURL = directory.appendingPathComponent("info.json")
+                        if let infoData = try? Data(contentsOf: infoURL),
+                           let scanModel = try? JSONDecoder().decode(ScanModel.self, from: infoData) {
+                            scanModels.append(scanModel)
+                        } else {
+                            // Create a new model from the directory
+                            let dirAttrs = try FileManager.default.attributesOfItem(atPath: directory.path)
+                            let creationDate = dirAttrs[.creationDate] as? Date ?? Date()
+                            let fileSize = (try? Data(contentsOf: worldMapURL))?.count ?? 0
+                            
+                            let scanModel = ScanModel(
+                                id: UUID(),
+                                name: directory.lastPathComponent,
+                                fileURL: directory,
+                                creationDate: creationDate,
+                                fileExtension: "arworldmap",
+                                fileSize: Int64(fileSize)
+                            )
+                            scanModels.append(scanModel)
+                        }
+                    }
+                }
+                
+                // Also check regular Scans directory for obj/usdz files (for compatibility)
+                if let scansDirectory = self.scansDirectoryURL {
+                    let scanFileURLs = try FileManager.default.contentsOfDirectory(at: scansDirectory, 
+                                                              includingPropertiesForKeys: [.creationDateKey, .fileSizeKey], 
+                                                              options: .skipsHiddenFiles)
+                    
+                    let validFileURLs = scanFileURLs.filter { $0.pathExtension == "obj" || $0.pathExtension == "usdz" }
+                    
+                    for url in validFileURLs {
+                        if let scanModel = ScanModel.from(url: url) {
+                            scanModels.append(scanModel)
+                        }
                     }
                 }
                 

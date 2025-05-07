@@ -44,24 +44,31 @@ class ARAnchorService: NSObject, ARSessionDelegate {
     
     // MARK: - Public Methods
     
-    /// Sets up and returns an AR session with world tracking and world map loading
+    /// Sets up a new AR session with a new configuration
     func setupARSession() -> ARSession {
+        // Create a new ARSession
         let session = ARSession()
+        arSession = session
         session.delegate = self
-        self.arSession = session
         
-        // Start a new AR session with existing world map if available
+        // Create a configuration suitable for our use case
         let configuration = ARWorldTrackingConfiguration()
         
+        // Enable plane detection for better tracking
         configuration.planeDetection = [.horizontal, .vertical]
-        configuration.environmentTexturing = .automatic
-        configuration.isLightEstimationEnabled = true
         
-        // Try to load previous world map
-        loadWorldMap(for: configuration)
+        // Enable LiDAR features if available
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+            configuration.sceneReconstruction = .mesh
+            configuration.frameSemantics.insert(.smoothedSceneDepth)
+        }
         
-        // Run the session with the configuration
+        // Start the session with this configuration
         session.run(configuration)
+        
+        // Update status
+        statusSubject.send("AR session initialized")
+        
         return session
     }
     
@@ -243,6 +250,40 @@ class ARAnchorService: NSObject, ARSessionDelegate {
         let removedIds = anchors.map { $0.identifier }
         sphereAnchors.removeAll { removedIds.contains($0.identifier) }
         anchorsSubject.send(sphereAnchors)
+    }
+    
+    func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
+        // Notify about tracking state changes for relocalization feedback
+        NotificationCenter.default.post(
+            name: NSNotification.Name("ARTrackingStateChanged"),
+            object: nil,
+            userInfo: ["trackingState": camera.trackingState]
+        )
+        
+        // Also update status message
+        switch camera.trackingState {
+        case .normal:
+            statusSubject.send("Tracking normal - AR anchors active")
+        case .limited(let reason):
+            var message = "Limited tracking: "
+            switch reason {
+            case .excessiveMotion:
+                message += "Move more slowly"
+            case .insufficientFeatures:
+                message += "Not enough features in view"
+            case .initializing:
+                message += "Initializing..."
+            case .relocalizing:
+                message += "Relocalizing..."
+            @unknown default:
+                message += "Unknown limitation"
+            }
+            statusSubject.send(message)
+        case .notAvailable:
+            statusSubject.send("Tracking not available")
+        @unknown default:
+            statusSubject.send("Unknown tracking state")
+        }
     }
     
     func session(_ session: ARSession, didFailWithError error: Error) {

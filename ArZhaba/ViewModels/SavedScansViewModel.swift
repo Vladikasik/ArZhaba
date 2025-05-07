@@ -45,30 +45,59 @@ class SavedScansViewModel: ObservableObject {
     
     /// Loads a specific saved scan and its AR world map
     func loadScan(_ scan: ScanModel) {
+        // Display loading message
+        showAlert(withMessage: "Loading saved AR reference points...")
+        
         // Setup a new AR session from the anchor service instead of getting an existing one
         let session = anchorService.setupARSession()
         
         do {
-            // Attempt to load the saved AR world map
-            let config = ARWorldTrackingConfiguration()
-            
-            // Try to load world map data from file
+            // Verify that the world map file exists
             let worldMapURL = scan.fileURL.appendingPathComponent("worldmap.arworldmap")
-            if let data = try? Data(contentsOf: worldMapURL),
-               let worldMap = try NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data) {
-                
-                // Use the loaded world map
-                config.initialWorldMap = worldMap
-                showAlert(withMessage: "Loading saved anchors. Please align your device with the environment.")
-            } else {
+            
+            guard FileManager.default.fileExists(atPath: worldMapURL.path) else {
                 showAlert(withMessage: "No world map found for this scan")
                 return
             }
             
+            let data = try Data(contentsOf: worldMapURL)
+            guard let worldMap = try NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data) else {
+                showAlert(withMessage: "Could not load world map data")
+                return
+            }
+            
+            // Create a suitable configuration
+            let config = ARWorldTrackingConfiguration()
+            
+            // Essential for relocalization
+            config.planeDetection = [.horizontal, .vertical]
+            config.worldAlignment = .gravity
+            
+            // Set the initial world map for relocalization
+            config.initialWorldMap = worldMap
+            
             // Run the session with the configuration
-            session.run(config)
+            showAlert(withMessage: "Loading saved anchors. Please move around to help the device recognize the environment.")
+            session.run(config, options: [.resetTracking, .removeExistingAnchors])
+            
+            // Register for notifications when tracking state changes
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(trackingStateChanged),
+                name: NSNotification.Name("ARTrackingStateChanged"),
+                object: nil
+            )
+            
         } catch {
             showAlert(withMessage: "Failed to load scan: \(error.localizedDescription)")
+        }
+    }
+    
+    @objc private func trackingStateChanged(_ notification: Notification) {
+        if let trackingState = notification.userInfo?["trackingState"] as? ARCamera.TrackingState,
+           case .normal = trackingState {
+            // Tracking is normal, anchors should be visible
+            showAlert(withMessage: "Environment recognized! Red dots show saved reference points.")
         }
     }
     

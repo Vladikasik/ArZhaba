@@ -257,6 +257,13 @@ class ScanningViewModel: ObservableObject {
                     return
                 }
                 
+                // Check if we have any sphere anchors
+                let sphereAnchors = self.sphereAnchors
+                if sphereAnchors.isEmpty {
+                    self.showAlert(withMessage: "No dots placed in this recording. Place at least one dot to save.")
+                    return
+                }
+                
                 // Save the world map
                 do {
                     // Archive the world map
@@ -264,16 +271,28 @@ class ScanningViewModel: ObservableObject {
                     
                     // Create directory for the scan
                     let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-                    let scanDirectory = documentsDirectory.appendingPathComponent("ARScans").appendingPathComponent(UUID().uuidString)
+                    let arScansDirectory = documentsDirectory.appendingPathComponent("ARScans")
                     
-                    try FileManager.default.createDirectory(at: scanDirectory, withIntermediateDirectories: true)
+                    // Make sure the ARScans directory exists
+                    if !FileManager.default.fileExists(atPath: arScansDirectory.path) {
+                        try FileManager.default.createDirectory(at: arScansDirectory, withIntermediateDirectories: true, attributes: nil)
+                    }
+                    
+                    // Create a unique directory for this scan
+                    let dateFormatter = DateFormatter()
+                    dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+                    let timestamp = dateFormatter.string(from: Date())
+                    let scanDirName = "Scan_\(timestamp)"
+                    let scanDirectory = arScansDirectory.appendingPathComponent(scanDirName)
+                    
+                    try FileManager.default.createDirectory(at: scanDirectory, withIntermediateDirectories: true, attributes: nil)
                     
                     // Save the world map to the scan directory
                     let worldMapURL = scanDirectory.appendingPathComponent("worldmap.arworldmap")
                     try data.write(to: worldMapURL)
                     
                     // Create a scan model and save it
-                    let scanName = "Sphere Test \(Date().formatted(date: .abbreviated, time: .shortened))"
+                    let scanName = "AR Scan \(timestamp)"
                     let currentDate = Date()
                     let scanModel = ScanModel(
                         id: UUID(),
@@ -291,7 +310,7 @@ class ScanningViewModel: ObservableObject {
                     }
                     
                     self.lastSavedURL = scanDirectory
-                    self.showAlert(withMessage: "AR world map with \(self.sphereAnchors.count) spheres saved successfully")
+                    self.showAlert(withMessage: "Saved AR world map with \(self.sphereAnchors.count) dots. You can now view it in Saved Scans.")
                     
                 } catch {
                     self.showAlert(withMessage: "Failed to save world map: \(error.localizedDescription)")

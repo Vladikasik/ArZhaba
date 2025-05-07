@@ -147,6 +147,11 @@ class ARScanService: NSObject {
         return scanSessionSubject.value
     }
     
+    /// Gets the mesh asset for export - public alias for createMDLAsset
+    func getMeshAsset() -> MDLAsset? {
+        return createMDLAsset()
+    }
+    
     /// Converts the current set of mesh anchors to an MDLAsset for export
     func createMDLAsset() -> MDLAsset? {
         let currentMeshAnchors = scanSessionSubject.value.meshAnchors
