@@ -130,6 +130,109 @@ class RoomService {
         }
     }
     
+    /// Imports a room from a selected directory
+    func importRoomFromDirectory(_ directoryURL: URL, roomName: String) -> RoomModel? {
+        // Get the URL to where we want to save the room in our app's documents directory
+        guard let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            statusSubject.send("Could not access documents directory")
+            return nil
+        }
+        
+        let targetRoomsDir = documentsDirectory.appendingPathComponent("Rooms", isDirectory: true)
+        let targetRoomDir = targetRoomsDir.appendingPathComponent(roomName, isDirectory: true)
+        
+        // Check if a room with the same name already exists
+        if rooms.contains(where: { $0.name == roomName }) {
+            statusSubject.send("A room with this name already exists")
+            return nil
+        }
+        
+        do {
+            // Create the target directory if it doesn't exist
+            if !FileManager.default.fileExists(atPath: targetRoomDir.path) {
+                try FileManager.default.createDirectory(at: targetRoomDir, withIntermediateDirectories: true)
+            }
+            
+            // Look for the world map and anchors files in the source directory
+            Logger.shared.info("Scanning directory: \(directoryURL.path)", destination: "RoomService.importRoomFromDirectory")
+            
+            // Get contents safely with security scope
+            let securityScoped = directoryURL.startAccessingSecurityScopedResource()
+            defer {
+                if securityScoped {
+                    directoryURL.stopAccessingSecurityScopedResource()
+                }
+            }
+            
+            // List contents of the directory
+            let sourceContents = try FileManager.default.contentsOfDirectory(at: directoryURL, includingPropertiesForKeys: nil)
+            
+            Logger.shared.info("Found \(sourceContents.count) items in directory", destination: "RoomService.importRoomFromDirectory")
+            
+            // Search for world map and anchors files
+            var worldMapURL: URL?
+            var anchorsURL: URL?
+            
+            // Check for files with the expected names or extensions
+            for fileURL in sourceContents {
+                let filename = fileURL.lastPathComponent.lowercased()
+                Logger.shared.debug("Found file: \(filename)", destination: "RoomService.importRoomFromDirectory")
+                
+                if filename.contains("worldmap") || filename.hasSuffix(".arworldmap") {
+                    worldMapURL = fileURL
+                    Logger.shared.info("Found world map file: \(filename)", destination: "RoomService.importRoomFromDirectory")
+                } else if filename.contains("anchors") || filename.hasSuffix(".data") {
+                    anchorsURL = fileURL
+                    Logger.shared.info("Found anchors file: \(filename)", destination: "RoomService.importRoomFromDirectory")
+                }
+            }
+            
+            // Verify we found both required files
+            guard let sourceWorldMapURL = worldMapURL, let sourceAnchorsURL = anchorsURL else {
+                statusSubject.send("Could not find world map and anchors files in the selected directory")
+                return nil
+            }
+            
+            // Create target file URLs
+            let targetWorldMapURL = targetRoomDir.appendingPathComponent("worldMap.arworldmap")
+            let targetAnchorsURL = targetRoomDir.appendingPathComponent("anchors.data")
+            
+            // Copy the files with security scopes
+            let worldMapSecurityScoped = sourceWorldMapURL.startAccessingSecurityScopedResource()
+            let anchorsSecurityScoped = sourceAnchorsURL.startAccessingSecurityScopedResource()
+            
+            defer {
+                if worldMapSecurityScoped {
+                    sourceWorldMapURL.stopAccessingSecurityScopedResource()
+                }
+                if anchorsSecurityScoped {
+                    sourceAnchorsURL.stopAccessingSecurityScopedResource()
+                }
+            }
+            
+            // Copy the files
+            try FileManager.default.copyItem(at: sourceWorldMapURL, to: targetWorldMapURL)
+            try FileManager.default.copyItem(at: sourceAnchorsURL, to: targetAnchorsURL)
+            
+            // Create the room model
+            let room = RoomModel(name: roomName, worldMapURL: targetWorldMapURL, anchorsURL: targetAnchorsURL)
+            
+            // Add to rooms collection
+            rooms.append(room)
+            roomsSubject.send(rooms)
+            
+            // Save rooms list
+            saveRoomsList()
+            
+            statusSubject.send("Room '\(roomName)' imported successfully")
+            return room
+        } catch {
+            statusSubject.send("Error importing room: \(error.localizedDescription)")
+            Logger.shared.error("Import error details: \(error)", destination: "RoomService.importRoomFromDirectory")
+            return nil
+        }
+    }
+    
     /// Loads the specified AR world map
     func loadWorldMap(from room: RoomModel) -> ARWorldMap? {
         do {
@@ -546,6 +649,20 @@ class RoomService {
             print("Sharing preparation error: \(error)")
             return nil
         }
+    }
+    
+    /// Gets the directory URL for a room
+    func getRoomDirectoryURL(for room: RoomModel) -> URL? {
+        // Get the directory containing the room files
+        let roomDirectory = room.worldMapURL.deletingLastPathComponent()
+        
+        // Check if the directory exists
+        guard FileManager.default.fileExists(atPath: roomDirectory.path) else {
+            statusSubject.send("Room directory not found")
+            return nil
+        }
+        
+        return roomDirectory
     }
     
     // MARK: - Private Methods

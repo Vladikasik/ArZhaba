@@ -19,7 +19,8 @@ class RoomViewModel: ObservableObject {
     @Published var isShowingNewRoomDialog: Bool = false
     @Published var newRoomName: String = ""
     
-    // Controls for room selection
+    // Controls for room selection (deprecated)
+    @available(*, deprecated, message: "No longer used with new swipeable UI")
     @Published var isShowingRoomSelector: Bool = false
     
     // Loading state and progress
@@ -262,7 +263,18 @@ class RoomViewModel: ObservableObject {
     }
     
     /// Delete a room
+    @available(*, deprecated, message: "Use deleteRoomSwipe instead")
     func deleteRoom(_ room: RoomModel) {
+        // If this is the current room, return to idle first
+        if currentRoom?.id == room.id {
+            returnToIdle()
+        }
+        
+        roomService.deleteRoom(room)
+    }
+    
+    /// Delete a room from swipe action (new implementation)
+    func deleteRoomSwipe(_ room: RoomModel) {
         // If this is the current room, return to idle first
         if currentRoom?.id == room.id {
             returnToIdle()
@@ -296,6 +308,7 @@ class RoomViewModel: ObservableObject {
     }
     
     /// Loads a room and sets showARRoom to true
+    @available(*, deprecated, message: "Use loadAndShowRoomSwipe instead")
     func loadAndShowRoom(_ room: RoomModel) {
         // Clear states
         isSharing = false
@@ -323,6 +336,37 @@ class RoomViewModel: ObservableObject {
         }
     }
     
+    /// Loads a room from swipe action (new implementation)
+    func loadAndShowRoomSwipe(_ room: RoomModel) {
+        // Clear states
+        isSharing = false
+        shareURL = nil
+        
+        // Initialize AR session if not done yet
+        initializeARSessionIfNeeded()
+        
+        // Get a fresh session before loading the room to avoid state issues
+        let _ = getARSession()
+        
+        // Set loading state
+        isLoading = true
+        loadingProgress = 0.0
+        loadingMessage = "Loading room: \(room.name)"
+        Logger.shared.info("Loading room from swipe action: \(room.name)", destination: "RoomViewModel.loadAndShowRoomSwipe")
+        
+        // Try to load the room and immediately trigger AR view
+        if anchorService.loadRoom(room) {
+            // Immediately signal the view to show AR Room
+            shouldShowARRoom = true
+            Logger.shared.info("Successfully triggered AR view for room: \(room.name)", destination: "RoomViewModel.loadAndShowRoomSwipe")
+        } else {
+            // Loading failed, show an error
+            showAlert(message: "Failed to load room: \(room.name). Please try again.")
+            isLoading = false
+            Logger.shared.error("Failed to load room: \(room.name)", destination: "RoomViewModel.loadAndShowRoomSwipe")
+        }
+    }
+    
     /// Exits the current mode (recording or viewing)
     func exitCurrentMode() {
         if sessionState == .recording {
@@ -332,15 +376,66 @@ class RoomViewModel: ObservableObject {
         }
     }
     
-    /// Share a room file
+    /// Share a room file (deprecated)
+    @available(*, deprecated, message: "Use shareRoomSwipe instead")
     func shareRoom(url: URL) {
         // Clear any pending state from previous actions
         shouldShowARRoom = false
         isShowingNewRoomDialog = false
-        isShowingRoomSelector = false
         
         // Set sharing properties
         isSharing = true
         shareURL = url
+    }
+    
+    /// Share a room from swipe action (new implementation)
+    func shareRoomSwipe(url: URL) {
+        // Clear pending states and ensure no other sheets are displayed
+        shouldShowARRoom = false
+        isShowingNewRoomDialog = false
+        
+        Logger.shared.info("Preparing to share room from URL: \(url.lastPathComponent)", destination: "RoomViewModel.shareRoomSwipe")
+        
+        // Small delay to ensure proper view transitions
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self = self else { return }
+            
+            // Set sharing properties
+            self.isSharing = true
+            self.shareURL = url
+            Logger.shared.info("Share sheet triggered for room", destination: "RoomViewModel.shareRoomSwipe")
+        }
+    }
+    
+    /// Import a room from a selected directory
+    func importRoomFromDirectory(url: URL) {
+        // Get the directory name as the room name
+        let roomName = url.lastPathComponent
+        
+        // Log start of import
+        Logger.shared.info("Starting room import from directory: \(roomName)",
+                 destination: "RoomViewModel.importRoomFromDirectory")
+        
+        isLoading = true
+        statusMessage = "Importing room: \(roomName)..."
+        
+        // Call the RoomService to handle the import
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            
+            if let room = self.roomService.importRoomFromDirectory(url, roomName: roomName) {
+                self.statusMessage = "Room '\(roomName)' imported successfully"
+                self.isLoading = false
+                
+                // Refresh available rooms list
+                self.loadAvailableRooms()
+                
+                // Don't automatically load the room, just show a success message
+                self.showAlert(message: "Room '\(roomName)' imported successfully. You can now find it in your rooms list.")
+            } else {
+                self.showAlert(message: "Failed to import room from directory")
+                self.isLoading = false
+            }
+        }
     }
 } 

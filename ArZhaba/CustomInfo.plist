@@ -13,6 +13,12 @@
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
+    <key>UISupportsDocumentBrowser</key>
+    <true/>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>This app needs access to import AR rooms from your Documents folder.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>This app needs access to import AR rooms from your Downloads folder.</string>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
@@ -39,6 +45,19 @@
             <key>LSItemContentTypes</key>
             <array>
                 <string>com.apple.arkit.worldmap</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Folder</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Default</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.folder</string>
+                <string>public.directory</string>
             </array>
         </dict>
     </array>
